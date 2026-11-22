@@ -3,7 +3,7 @@
 use super::*;
 
 /// Name of the system file manager, for the project menu.
-const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
+pub(super) const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
     "Show in Finder"
 } else if cfg!(windows) {
     "Show in Explorer"

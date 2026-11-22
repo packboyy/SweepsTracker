@@ -22,6 +22,10 @@ rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 # Native folder picker for opening / creating projects.
 rfd = "0.15"
 
+# Native macOS menu bar (File / Edit / View / Window / Help).
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.15"
+
 [profile.release]
 opt-level = 3
 strip = true

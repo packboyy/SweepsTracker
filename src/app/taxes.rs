@@ -109,7 +109,7 @@ impl App {
     }
 
     /// Asks where to save, then writes the CSV (one year, or everything).
-    fn export_csv(&mut self, year: Option<i32>) {
+    pub(super) fn export_csv(&mut self, year: Option<i32>) {
         let name = match year {
             Some(y) => format!("sweeps-{y}.csv"),
             None => "sweeps-all.csv".to_string(),

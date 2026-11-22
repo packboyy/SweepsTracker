@@ -7,6 +7,7 @@ It runs on macOS, Windows, and Linux. It's written in Rust with [egui](https://g
 - One page per casino, with the same columns as the spreadsheet: **Date, Spent, CC Received, Withdrawal**, plus free SC you collect (daily logins, signup bonuses, mail-in…)
 - **Withdrawals for taxes:** payout method (bank by default, gift card, crypto), fees, and pending/received status with the date the money arrived
 - **Taxes page:** per-year totals by received date, payout methods, estimated deductible losses, pending payouts, a per-casino breakdown, and **CSV export** for your tax preparer (estimates, not tax advice)
+- **Native macOS menu bar:** File (New / Open / Open Recent / Save As / Export CSV / Show in Finder), Edit (Undo Delete, Add Casino, Paste Rows), View (Overview ⌘1, Taxes ⌘2, Recently Deleted ⌘3, Full Screen), Window and Help. On Windows and Linux the same actions are in the sidebar project menu.
 - **Recently deleted:** deleted casinos and entries are kept and can be restored; right after a delete, the notice bar offers **Undo**
 - The discount on every purchase is worked out for you (e.g. $85 for 100 CC = 15% off)
 - Totals for each casino and for all casinos: spent, coins received, withdrawn, and **net profit**

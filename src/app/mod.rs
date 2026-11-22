@@ -3,6 +3,8 @@
 
 mod casino;
 mod dialogs;
+#[cfg(target_os = "macos")]
+mod native_menu;
 mod overview;
 mod picker;
 mod project;
@@ -84,6 +86,24 @@ struct Picker {
     anchor: egui::Rect,
 }
 
+/// Actions from the native macOS menu bar.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Clone)]
+enum Command {
+    New,
+    Open,
+    OpenRecent(PathBuf),
+    SaveAs,
+    ExportCsv,
+    Reveal,
+    Close,
+    UndoDelete,
+    AddCasino,
+    PasteRows,
+    Go(View),
+    SweepsGrail,
+}
+
 /// File-menu / shortcut / welcome-screen actions, run after the frame's UI is drawn
 /// (the folder pickers are blocking native dialogs).
 enum ProjectAction {
@@ -137,6 +157,8 @@ pub struct App {
     undo: Option<Undo>,
     /// Message the toast is showing and when it first appeared (for auto-dismiss).
     toast_shown: Option<(String, f64)>,
+    #[cfg(target_os = "macos")]
+    native_menu: native_menu::NativeMenu,
     /// Year shown on the Taxes page.
     tax_year: i32,
     /// Open project folder (holds sweeps.db and backups/). None shows the welcome screen.
@@ -413,6 +435,8 @@ impl App {
             cache: Cache::default(),
             undo: None,
             toast_shown: None,
+            #[cfg(target_os = "macos")]
+            native_menu: native_menu::NativeMenu::new(ctx),
             project: None,
             store: None,
             config,
@@ -596,18 +620,52 @@ impl App {
             self.notice = None;
             self.undo = None;
         }
-        // Only consume the undo when it's actually clicked; otherwise keep offering it.
-        if let Some(undo) = undo_clicked.then(|| self.undo.take()).flatten() {
-            let result = match undo {
-                Undo::Casino(id) => self.db().restore_casino(id),
-                Undo::Entry(entry) => self.db().restore_entry(entry),
-            };
-            if self.apply(result).is_some() {
-                self.notice = Some("Restored.".into());
-                if let Undo::Casino(id) = undo {
-                    self.view = View::Casino(id);
+        if undo_clicked {
+            self.undo_delete();
+        }
+    }
+
+    /// Restores the last deleted casino or entry (toast button / Edit menu).
+    fn undo_delete(&mut self) {
+        let Some(undo) = self.undo.take() else { return };
+        let result = match undo {
+            Undo::Casino(id) => self.db().restore_casino(id),
+            Undo::Entry(entry) => self.db().restore_entry(entry),
+        };
+        if self.apply(result).is_some() {
+            self.notice = Some("Restored.".into());
+            if let Undo::Casino(id) = undo {
+                self.view = View::Casino(id);
+            }
+        }
+    }
+
+    /// Runs a native menu command.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn run_command(&mut self, ctx: &egui::Context, command: Command) {
+        let has_project = self.project.is_some();
+        match command {
+            Command::New => self.action = Some(ProjectAction::New),
+            Command::Open => self.action = Some(ProjectAction::Open),
+            Command::OpenRecent(dir) => self.action = Some(ProjectAction::OpenRecent(dir)),
+            Command::SaveAs if has_project => self.action = Some(ProjectAction::SaveAs),
+            Command::Reveal if has_project => self.action = Some(ProjectAction::Reveal),
+            Command::Close if has_project => self.action = Some(ProjectAction::Close),
+            Command::ExportCsv if has_project => self.export_csv(None),
+            Command::UndoDelete => self.undo_delete(),
+            Command::AddCasino if has_project => {
+                self.picker.open = true;
+                self.picker.query.clear();
+                self.picker.focus = true;
+            }
+            Command::PasteRows => {
+                if let View::Casino(id) = self.view {
+                    self.pasting = Some((id, String::new()));
                 }
             }
+            Command::Go(view) if has_project => self.view = view,
+            Command::SweepsGrail => ctx.open_url(egui::OpenUrl::new_tab(grail::SITE)),
+            _ => {}
         }
     }
 
@@ -723,6 +781,19 @@ fn dialog(ctx: &egui::Context, title: &str, add_contents: impl FnOnce(&mut egui:
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_grail();
+        #[cfg(target_os = "macos")]
+        {
+            let on_casino = matches!(self.view, View::Casino(_)) && self.project.is_some();
+            self.native_menu.sync(
+                self.project.is_some(),
+                self.undo.is_some(),
+                on_casino,
+                &self.config.recent,
+            );
+            for command in self.native_menu.poll() {
+                self.run_command(ctx, command);
+            }
+        }
         // Title bar first so it spans the full window width above the sidebar.
         let project = self.project.as_deref().map(project_name);
         titlebar::show(ctx, project.as_deref());
