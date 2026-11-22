@@ -5,6 +5,7 @@ mod app;
 mod grail;
 mod model;
 mod store;
+mod tax;
 mod theme;
 mod titlebar;
 

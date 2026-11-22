@@ -82,8 +82,6 @@ impl App {
         let f = &mut self.form;
         let mut submit = false;
 
-        // Flush grid like the boxes above: a top cell with the type tabs and date, then a row
-        // of cells (label above field) ending with the Add button.
         // Blank fields count as 0; anything typed must be a non-negative amount.
         let ok = |t: &str| t.trim().is_empty() || parse_cents(t).is_some_and(|v| v >= 0);
         let cents = |t: &str| parse_cents(t).unwrap_or(0);
@@ -91,26 +89,26 @@ impl App {
             Kind::Purchase => {
                 ok(&f.spent) && ok(&f.cc) && (cents(&f.spent) > 0 || cents(&f.cc) > 0)
             }
-            Kind::Withdrawal => cents(&f.amount) > 0,
+            Kind::Withdrawal => cents(&f.amount) > 0 && ok(&f.fee),
+            Kind::FreeSc => cents(&f.sc) > 0,
         };
+        // Flush grid like the boxes above: a top cell with the type tabs and date, then a row
+        // of cells (label above field) ending with the Add button.
         theme::boxed_flush(ui, |ui| {
             theme::grid_cell(ui, true, true, None, CELL_PAD, |ui| {
                 // The flush grid zeroes spacing; this row needs normal gaps between widgets.
                 ui.spacing_mut().item_spacing = Vec2::new(10.0, 6.0);
                 ui.horizontal(|ui| {
-                    let mut tab = if f.kind == Kind::Purchase { 0 } else { 1 };
+                    let kinds = [Kind::Purchase, Kind::Withdrawal, Kind::FreeSc];
+                    let mut tab = kinds.iter().position(|k| *k == f.kind).unwrap_or(0);
                     theme::tab_bar(
                         ui,
                         "entry_kind",
                         &mut tab,
-                        &["Purchase", "Withdrawal"],
-                        240.0,
+                        &["Purchase", "Withdrawal", "Free SC"],
+                        330.0,
                     );
-                    f.kind = if tab == 0 {
-                        Kind::Purchase
-                    } else {
-                        Kind::Withdrawal
-                    };
+                    f.kind = kinds[tab];
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(theme::SHADOW);
                         if theme::button(ui, "Today").clicked() {
@@ -124,48 +122,101 @@ impl App {
                 });
             });
 
-            let purchase = f.kind == Kind::Purchase;
-            ui.columns(if purchase { 5 } else { 3 }, |cols| {
+            let columns = match f.kind {
+                Kind::Purchase => 5,
+                Kind::Withdrawal => 6,
+                Kind::FreeSc => 4,
+            };
+            ui.columns(columns, |cols| {
                 for col in cols.iter_mut() {
                     col.spacing_mut().item_spacing = Vec2::ZERO;
                 }
-                let first = if purchase {
-                    let r = field_cell(&mut cols[0], true, "SPENT $", |ui| {
-                        let w = fill_width(ui);
-                        amount_field(ui, &mut f.spent, "85", w)
-                    });
-                    submit |= submitted(&cols[0], &r);
-                    let r2 = field_cell(&mut cols[1], false, "CC RECEIVED", |ui| {
-                        let w = fill_width(ui);
-                        amount_field(ui, &mut f.cc, "100", w)
-                    });
-                    submit |= submitted(&cols[1], &r2);
-                    let discount = match (cents(&f.spent), cents(&f.cc)) {
-                        (s, c) if s > 0 && c > 0 => percent((c - s) as f64 / c as f64),
-                        _ => "—".into(),
-                    };
-                    field_cell(&mut cols[2], false, "DISCOUNT", |ui| {
-                        let size = [ui.available_width(), ui.spacing().interact_size.y];
-                        ui.add_sized(
-                            size,
-                            egui::Label::new(RichText::new(discount).family(theme::bold())),
-                        )
-                    });
-                    r
-                } else {
-                    let r = field_cell(&mut cols[0], true, "AMOUNT $", |ui| {
-                        let w = fill_width(ui);
-                        amount_field(ui, &mut f.amount, "500", w)
-                    });
-                    submit |= submitted(&cols[0], &r);
-                    r
+                let first = match f.kind {
+                    Kind::Purchase => {
+                        let r = field_cell(&mut cols[0], true, "SPENT $", |ui| {
+                            let w = fill_width(ui);
+                            amount_field(ui, &mut f.spent, "85", w)
+                        });
+                        submit |= submitted(&cols[0], &r);
+                        let r2 = field_cell(&mut cols[1], false, "CC RECEIVED", |ui| {
+                            let w = fill_width(ui);
+                            amount_field(ui, &mut f.cc, "100", w)
+                        });
+                        submit |= submitted(&cols[1], &r2);
+                        let discount = match (cents(&f.spent), cents(&f.cc)) {
+                            (s, c) if s > 0 && c > 0 => percent((c - s) as f64 / c as f64),
+                            _ => "—".into(),
+                        };
+                        field_cell(&mut cols[2], false, "DISCOUNT", |ui| {
+                            let size = [ui.available_width(), ui.spacing().interact_size.y];
+                            ui.add_sized(
+                                size,
+                                egui::Label::new(RichText::new(discount).family(theme::bold())),
+                            )
+                        });
+                        r
+                    }
+                    Kind::Withdrawal => {
+                        let r = field_cell(&mut cols[0], true, "AMOUNT $", |ui| {
+                            let w = fill_width(ui);
+                            amount_field(ui, &mut f.amount, "500", w)
+                        });
+                        submit |= submitted(&cols[0], &r);
+                        field_cell(&mut cols[1], false, "METHOD", |ui| {
+                            let w = fill_width(ui);
+                            choice(
+                                ui,
+                                "new_method",
+                                &mut f.method,
+                                &Method::ALL,
+                                Method::label,
+                                w,
+                            )
+                        });
+                        let r2 = field_cell(&mut cols[2], false, "FEE $", |ui| {
+                            let w = fill_width(ui);
+                            amount_field(ui, &mut f.fee, "0", w)
+                        });
+                        submit |= submitted(&cols[2], &r2);
+                        field_cell(&mut cols[3], false, "STATUS", |ui| {
+                            let w = fill_width(ui);
+                            choice(
+                                ui,
+                                "new_status",
+                                &mut f.received,
+                                &[true, false],
+                                status_label,
+                                w,
+                            )
+                        });
+                        r
+                    }
+                    Kind::FreeSc => {
+                        let r = field_cell(&mut cols[0], true, "SC", |ui| {
+                            let w = fill_width(ui);
+                            amount_field(ui, &mut f.sc, "1", w)
+                        });
+                        submit |= submitted(&cols[0], &r);
+                        field_cell(&mut cols[1], false, "SOURCE", |ui| {
+                            let w = fill_width(ui);
+                            choice(
+                                ui,
+                                "new_source",
+                                &mut f.source,
+                                &Source::ALL,
+                                Source::label,
+                                w,
+                            )
+                        });
+                        r
+                    }
                 };
                 if f.focus_first {
                     first.request_focus();
                     f.focus_first = false;
                 }
 
-                let (note_col, add_col) = if purchase { (3, 4) } else { (1, 2) };
+                let (note_col, add_col) = (columns - 2, columns - 1);
                 let r = field_cell(&mut cols[note_col], false, "NOTE", |ui| {
                     let w = fill_width(ui);
                     theme::input(
@@ -188,19 +239,42 @@ impl App {
         if !submit {
             return;
         }
-        let (kind, date, note) = (f.kind, f.date, f.note.trim().to_string());
-        let (spent, cc, amount) = (cents(&f.spent), cents(&f.cc), cents(&f.amount));
-        let result = match kind {
-            Kind::Purchase => self.db().add_purchase(casino_id, date, spent, cc, &note),
-            Kind::Withdrawal => self.db().add_redemption(casino_id, date, amount, &note),
+        let (date, note) = (f.date, f.note.trim().to_string());
+        let result = match f.kind {
+            Kind::Purchase => {
+                let (spent, cc) = (cents(&f.spent), cents(&f.cc));
+                self.db().add_purchase(casino_id, date, spent, cc, &note)
+            }
+            Kind::Withdrawal => {
+                let r = store::RedemptionInput {
+                    date,
+                    amount: cents(&f.amount),
+                    method: f.method,
+                    fee: cents(&f.fee),
+                    received: f.received.then_some(date),
+                    note,
+                };
+                self.db().add_redemption(casino_id, &r)
+            }
+            Kind::FreeSc => {
+                let (sc, source) = (cents(&f.sc), f.source);
+                self.db().add_free_coins(casino_id, date, sc, source, &note)
+            }
         };
-        // Keep what was typed if saving failed; otherwise clear for the next entry.
+        // Keep what was typed if saving failed; otherwise clear the amounts for the next
+        // entry (method, status and source stay as chosen).
         if self.apply(result).is_some() {
             let f = &mut self.form;
-            f.spent.clear();
-            f.cc.clear();
-            f.amount.clear();
-            f.note.clear();
+            for field in [
+                &mut f.spent,
+                &mut f.cc,
+                &mut f.amount,
+                &mut f.fee,
+                &mut f.sc,
+                &mut f.note,
+            ] {
+                field.clear();
+            }
             f.focus_first = true;
         }
     }
@@ -219,17 +293,19 @@ impl App {
             return;
         }
 
-        // Purchases and redemptions in one list, newest first, like the spreadsheet.
+        // Purchases, redemptions and free coins in one list, newest first, like the spreadsheet.
         let mut rows: Vec<Row> = casino
             .purchases
             .iter()
             .map(Row::Purchase)
             .chain(casino.redemptions.iter().map(Row::Redemption))
+            .chain(casino.free_coins.iter().map(Row::FreeCoins))
             .collect();
         rows.sort_by_key(|r| std::cmp::Reverse(r.sort_key()));
 
         let mut edit = None;
         let mut delete = None;
+        let mut mark_received = None;
         let right = Layout::right_to_left(Align::Center);
 
         // Leave room below the table for the box's margin, border and shadow.
@@ -242,12 +318,13 @@ impl App {
                 .resizable(true)
                 .max_scroll_height(max_height)
                 .cell_layout(Layout::left_to_right(Align::Center))
-                .column(Column::exact(100.0))
-                .column(Column::exact(100.0))
-                .column(Column::exact(110.0))
                 .column(Column::exact(90.0))
-                .column(Column::exact(110.0))
-                .column(Column::remainder().at_least(100.0))
+                .column(Column::exact(85.0))
+                .column(Column::exact(95.0))
+                .column(Column::exact(75.0))
+                .column(Column::exact(100.0))
+                .column(Column::remainder().at_least(140.0).clip(true))
+                .column(Column::initial(120.0).at_least(60.0).clip(true))
                 .column(Column::exact(110.0))
                 .header(26.0, |mut header| {
                     for h in [
@@ -256,6 +333,7 @@ impl App {
                         "CC RECEIVED",
                         "DISCOUNT",
                         "WITHDRAWAL",
+                        "DETAILS",
                         "NOTE",
                         "",
                     ] {
@@ -290,6 +368,7 @@ impl App {
                                         }
                                     });
                                     row.col(|_| {});
+                                    row.col(|_| {});
                                 }
                                 Row::Redemption(red) => {
                                     for _ in 0..3 {
@@ -297,6 +376,36 @@ impl App {
                                     }
                                     row.col(|ui| {
                                         ui.with_layout(right, |ui| ui.label(money(red.amount)));
+                                    });
+                                    row.col(|ui| {
+                                        let mut details = red.method.label().to_string();
+                                        if red.fee > 0 {
+                                            details += &format!(" · {} fee", money(red.fee));
+                                        }
+                                        match red.received {
+                                            Some(d) => {
+                                                details += &format!(" · received {}", d.format("%-m/%-d/%Y"));
+                                                ui.label(dim(details));
+                                            }
+                                            None => {
+                                                ui.label(dim(details + " ·"));
+                                                if theme::button(ui, "Mark received")
+                                                    .on_hover_text("Record today as the date the money arrived")
+                                                    .clicked()
+                                                {
+                                                    mark_received = Some(red.id);
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                                Row::FreeCoins(f) => {
+                                    for _ in 0..4 {
+                                        row.col(|_| {});
+                                    }
+                                    row.col(|ui| {
+                                        ui.label(format!("+{} free SC", coins(f.sc)));
+                                        ui.label(dim(format!("· {}", f.source.label())));
                                     });
                                 }
                             }
@@ -308,10 +417,10 @@ impl App {
                                     edit = Some(r.edit_state());
                                 }
                                 if theme::button(ui, RichText::new("✕").color(LOSS))
-                                    .on_hover_text("Delete")
+                                    .on_hover_text("Delete (you can restore it from Recently deleted)")
                                     .clicked()
                                 {
-                                    delete = Some(r.row_ref());
+                                    delete = Some(r.entry_ref());
                                 }
                             });
                         });
@@ -322,20 +431,22 @@ impl App {
         if edit.is_some() {
             self.editing = edit;
         }
-        if let Some(row) = delete {
-            let result = match row {
-                RowRef::Purchase(id) => self.db().delete_purchase(id),
-                RowRef::Redemption(id) => self.db().delete_redemption(id),
-            };
+        if let Some(entry) = delete {
+            let result = self.db().delete_entry(entry);
+            self.apply(result);
+        }
+        if let Some(id) = mark_received {
+            let result = self.db().mark_received(id, today());
             self.apply(result);
         }
     }
 }
 
-/// A purchase or a redemption, for showing both in one table.
+/// A purchase, redemption or free-coins entry, for showing them all in one table.
 enum Row<'a> {
     Purchase(&'a Purchase),
     Redemption(&'a Redemption),
+    FreeCoins(&'a FreeCoins),
 }
 
 impl Row<'_> {
@@ -343,6 +454,7 @@ impl Row<'_> {
         match self {
             Row::Purchase(p) => p.date,
             Row::Redemption(r) => r.date,
+            Row::FreeCoins(f) => f.date,
         }
     }
 
@@ -350,41 +462,60 @@ impl Row<'_> {
         match self {
             Row::Purchase(p) => &p.note,
             Row::Redemption(r) => &r.note,
+            Row::FreeCoins(f) => &f.note,
         }
     }
 
-    fn row_ref(&self) -> RowRef {
+    fn entry_ref(&self) -> EntryRef {
         match self {
-            Row::Purchase(p) => RowRef::Purchase(p.id),
-            Row::Redemption(r) => RowRef::Redemption(r.id),
+            Row::Purchase(p) => EntryRef::Purchase(p.id),
+            Row::Redemption(r) => EntryRef::Redemption(r.id),
+            Row::FreeCoins(f) => EntryRef::FreeCoins(f.id),
         }
     }
 
-    /// Date, then redemptions after purchases on the same day, then entry order.
+    /// Date, then purchases / redemptions / free coins on the same day, then entry order.
     fn sort_key(&self) -> (NaiveDate, u8, i64) {
         match self {
             Row::Purchase(p) => (p.date, 0, p.id),
             Row::Redemption(r) => (r.date, 1, r.id),
+            Row::FreeCoins(f) => (f.date, 2, f.id),
         }
     }
 
     fn edit_state(&self) -> EditState {
+        let blank = EditState {
+            row: self.entry_ref(),
+            date: self.date(),
+            spent: String::new(),
+            cc: String::new(),
+            amount: String::new(),
+            method: Method::Bank,
+            fee: String::new(),
+            received: true,
+            received_date: self.date(),
+            sc: String::new(),
+            source: Source::Daily,
+            note: self.note().to_string(),
+        };
         match self {
             Row::Purchase(p) => EditState {
-                row: RowRef::Purchase(p.id),
-                date: p.date,
                 spent: edit_text(p.spent),
                 cc: edit_text(p.cc_received),
-                amount: String::new(),
-                note: p.note.clone(),
+                ..blank
             },
             Row::Redemption(r) => EditState {
-                row: RowRef::Redemption(r.id),
-                date: r.date,
-                spent: String::new(),
-                cc: String::new(),
                 amount: edit_text(r.amount),
-                note: r.note.clone(),
+                method: r.method,
+                fee: edit_text(r.fee),
+                received: r.received.is_some(),
+                received_date: r.received.unwrap_or_else(today),
+                ..blank
+            },
+            Row::FreeCoins(f) => EditState {
+                sc: edit_text(f.sc),
+                source: f.source,
+                ..blank
             },
         }
     }

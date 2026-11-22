@@ -1,15 +1,15 @@
 //! Project database: one SQLite file (`sweeps.db`) per project folder.
 //!
 //! - Amounts are INTEGER cents (coins in hundredths), never floating point.
-//! - Purchases and redemptions are separate tables.
+//! - Purchases, redemptions and free coins are separate tables.
 //! - Every row has created_at / updated_at; deleting sets deleted_at instead of erasing,
-//!   so the record history stays available for taxes.
+//!   so the record history stays available for taxes (and "Recently deleted" can restore).
 //! - The schema version lives in `PRAGMA user_version`; `migrate` upgrades step by step.
 //! - The connection holds an exclusive lock, so a second window can't open the same project.
 
 use crate::model::{
-    legacy_cents, Casino, Cents, Data, LegacyData, ParsedRow, Purchase, Redemption,
-    LEGACY_PROJECT_FILE,
+    legacy_cents, Casino, Cents, Data, FreeCoins, LegacyData, Method, ParsedRow, Purchase,
+    Redemption, Source, LEGACY_PROJECT_FILE,
 };
 use chrono::NaiveDate;
 use rusqlite::{params, Connection, ErrorCode};
@@ -60,9 +60,109 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX redemptions_casino ON redemptions (casino_id, date);
     ",
+    // 2: tax fields on redemptions, free coins, and tracking which entries were deleted
+    //    together with their casino (so restoring the casino restores exactly those).
+    "
+    ALTER TABLE redemptions ADD COLUMN method TEXT NOT NULL DEFAULT 'bank'
+        CHECK (method IN ('bank', 'gift_card', 'crypto'));
+    ALTER TABLE redemptions ADD COLUMN fee_cents INTEGER NOT NULL DEFAULT 0
+        CHECK (fee_cents >= 0);
+    -- NULL while pending. Redemptions recorded before this existed count as received.
+    ALTER TABLE redemptions ADD COLUMN received_date TEXT;
+    UPDATE redemptions SET received_date = date;
+
+    ALTER TABLE purchases ADD COLUMN deleted_with_casino INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE redemptions ADD COLUMN deleted_with_casino INTEGER NOT NULL DEFAULT 0;
+    UPDATE purchases SET deleted_with_casino = 1
+        WHERE deleted_at IS NOT NULL
+          AND deleted_at = (SELECT c.deleted_at FROM casinos c WHERE c.id = casino_id);
+    UPDATE redemptions SET deleted_with_casino = 1
+        WHERE deleted_at IS NOT NULL
+          AND deleted_at = (SELECT c.deleted_at FROM casinos c WHERE c.id = casino_id);
+
+    CREATE TABLE free_coins (
+        id                   INTEGER PRIMARY KEY,
+        casino_id            INTEGER NOT NULL REFERENCES casinos (id),
+        date                 TEXT NOT NULL,
+        sc_cents             INTEGER NOT NULL CHECK (sc_cents > 0),
+        source               TEXT NOT NULL DEFAULT 'daily'
+            CHECK (source IN ('daily', 'signup', 'mail_in', 'promo', 'other')),
+        note                 TEXT NOT NULL DEFAULT '',
+        created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        deleted_at           TEXT,
+        deleted_with_casino  INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX free_coins_casino ON free_coins (casino_id, date);
+    ",
 ];
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+
+/// Tables holding a casino's entries (soft-deleted / restored together with the casino).
+const ENTRY_TABLES: [&str; 3] = ["purchases", "redemptions", "free_coins"];
+
+/// A purchase, redemption or free-coins row, by id.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EntryRef {
+    Purchase(i64),
+    Redemption(i64),
+    FreeCoins(i64),
+}
+
+impl EntryRef {
+    fn table(self) -> &'static str {
+        match self {
+            EntryRef::Purchase(_) => "purchases",
+            EntryRef::Redemption(_) => "redemptions",
+            EntryRef::FreeCoins(_) => "free_coins",
+        }
+    }
+
+    fn id(self) -> i64 {
+        match self {
+            EntryRef::Purchase(id) | EntryRef::Redemption(id) | EntryRef::FreeCoins(id) => id,
+        }
+    }
+}
+
+/// Fields of a redemption as entered in the form / edit dialog.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RedemptionInput {
+    pub date: NaiveDate,
+    pub amount: Cents,
+    pub method: Method,
+    pub fee: Cents,
+    pub received: Option<NaiveDate>,
+    pub note: String,
+}
+
+/// What "Recently deleted" shows.
+#[derive(Debug, Default)]
+pub struct Deleted {
+    pub casinos: Vec<DeletedCasino>,
+    pub entries: Vec<DeletedEntry>,
+}
+
+#[derive(Debug)]
+pub struct DeletedCasino {
+    pub id: i64,
+    pub name: String,
+    /// UTC timestamp, e.g. 2026-11-22T03:40:12.123Z
+    pub deleted_at: String,
+    /// Entries deleted along with it.
+    pub entries: i64,
+}
+
+#[derive(Debug)]
+pub struct DeletedEntry {
+    pub entry: EntryRef,
+    pub casino: String,
+    pub date: NaiveDate,
+    /// Spent (purchase), amount (redemption) or SC (free coins).
+    pub amount: Cents,
+    pub deleted_at: String,
+}
 
 pub fn db_path(dir: &Path) -> PathBuf {
     dir.join(DB_FILE)
@@ -164,20 +264,22 @@ impl Store {
                     name: r.get(1)?,
                     purchases: Vec::new(),
                     redemptions: Vec::new(),
+                    free_coins: Vec::new(),
                 })
             })
             .map_err(err)?
             .collect::<Result<_, _>>()
             .map_err(err)?;
+        let index = |casinos: &[Casino], id: i64| casinos.iter().position(|c| c.id == id);
 
-        let mut purchases = self
+        let mut stmt = self
             .conn
             .prepare(
                 "SELECT casino_id, id, date, spent_cents, cc_received_cents, note FROM purchases
                  WHERE deleted_at IS NULL ORDER BY date, id",
             )
             .map_err(err)?;
-        let rows = purchases
+        let rows = stmt
             .query_map([], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
@@ -193,19 +295,19 @@ impl Store {
             .map_err(err)?;
         for row in rows {
             let (casino_id, p) = row.map_err(err)?;
-            if let Some(c) = casinos.iter_mut().find(|c| c.id == casino_id) {
-                c.purchases.push(p);
+            if let Some(i) = index(&casinos, casino_id) {
+                casinos[i].purchases.push(p);
             }
         }
 
-        let mut redemptions = self
+        let mut stmt = self
             .conn
             .prepare(
-                "SELECT casino_id, id, date, amount_cents, note FROM redemptions
-                 WHERE deleted_at IS NULL ORDER BY date, id",
+                "SELECT casino_id, id, date, amount_cents, method, fee_cents, received_date, note
+                 FROM redemptions WHERE deleted_at IS NULL ORDER BY date, id",
             )
             .map_err(err)?;
-        let rows = redemptions
+        let rows = stmt
             .query_map([], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
@@ -213,15 +315,46 @@ impl Store {
                         id: r.get(1)?,
                         date: r.get(2)?,
                         amount: r.get(3)?,
-                        note: r.get(4)?,
+                        method: Method::from_key(&r.get::<_, String>(4)?),
+                        fee: r.get(5)?,
+                        received: r.get(6)?,
+                        note: r.get(7)?,
                     },
                 ))
             })
             .map_err(err)?;
         for row in rows {
             let (casino_id, r) = row.map_err(err)?;
-            if let Some(c) = casinos.iter_mut().find(|c| c.id == casino_id) {
-                c.redemptions.push(r);
+            if let Some(i) = index(&casinos, casino_id) {
+                casinos[i].redemptions.push(r);
+            }
+        }
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT casino_id, id, date, sc_cents, source, note FROM free_coins
+                 WHERE deleted_at IS NULL ORDER BY date, id",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    FreeCoins {
+                        id: r.get(1)?,
+                        date: r.get(2)?,
+                        sc: r.get(3)?,
+                        source: Source::from_key(&r.get::<_, String>(4)?),
+                        note: r.get(5)?,
+                    },
+                ))
+            })
+            .map_err(err)?;
+        for row in rows {
+            let (casino_id, f) = row.map_err(err)?;
+            if let Some(i) = index(&casinos, casino_id) {
+                casinos[i].free_coins.push(f);
             }
         }
         Ok(Data { casinos })
@@ -246,12 +379,17 @@ impl Store {
             .map_err(err)
     }
 
-    /// Soft-deletes the casino and its purchases and redemptions.
+    /// Soft-deletes the casino and its entries, marking those entries as deleted with the
+    /// casino so `restore_casino` brings back exactly them (entries deleted earlier on
+    /// their own stay deleted).
     pub fn delete_casino(&mut self, id: i64) -> Result<(), String> {
         let tx = self.conn.transaction().map_err(err)?;
-        for table in ["purchases", "redemptions"] {
+        for table in ENTRY_TABLES {
             tx.execute(
-                &format!("UPDATE {table} SET deleted_at = {NOW} WHERE casino_id = ?1 AND deleted_at IS NULL"),
+                &format!(
+                    "UPDATE {table} SET deleted_at = {NOW}, deleted_with_casino = 1
+                     WHERE casino_id = ?1 AND deleted_at IS NULL"
+                ),
                 [id],
             )
             .map_err(err)?;
@@ -264,7 +402,55 @@ impl Store {
         tx.commit().map_err(err)
     }
 
-    // ---- Purchases ----
+    /// Un-deletes a casino and the entries that were deleted along with it. Fails if
+    /// another casino now has the same name.
+    pub fn restore_casino(&mut self, id: i64) -> Result<(), String> {
+        let tx = self.conn.transaction().map_err(err)?;
+        tx.execute(
+            &format!("UPDATE casinos SET deleted_at = NULL, updated_at = {NOW} WHERE id = ?1"),
+            [id],
+        )
+        .map_err(err)?;
+        for table in ENTRY_TABLES {
+            tx.execute(
+                &format!(
+                    "UPDATE {table} SET deleted_at = NULL, deleted_with_casino = 0
+                     WHERE casino_id = ?1 AND deleted_with_casino = 1"
+                ),
+                [id],
+            )
+            .map_err(err)?;
+        }
+        tx.commit().map_err(err)
+    }
+
+    // ---- Entries ----
+
+    pub fn delete_entry(&self, entry: EntryRef) -> Result<(), String> {
+        self.conn
+            .execute(
+                &format!(
+                    "UPDATE {} SET deleted_at = {NOW}, deleted_with_casino = 0 WHERE id = ?1",
+                    entry.table()
+                ),
+                [entry.id()],
+            )
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    pub fn restore_entry(&self, entry: EntryRef) -> Result<(), String> {
+        self.conn
+            .execute(
+                &format!(
+                    "UPDATE {} SET deleted_at = NULL WHERE id = ?1",
+                    entry.table()
+                ),
+                [entry.id()],
+            )
+            .map(|_| ())
+            .map_err(err)
+    }
 
     pub fn add_purchase(
         &self,
@@ -304,67 +490,147 @@ impl Store {
             .map_err(err)
     }
 
-    pub fn delete_purchase(&self, id: i64) -> Result<(), String> {
+    pub fn add_redemption(&self, casino_id: i64, r: &RedemptionInput) -> Result<i64, String> {
+        insert_redemption(&self.conn, casino_id, r)?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn update_redemption(&self, id: i64, r: &RedemptionInput) -> Result<(), String> {
         self.conn
             .execute(
-                &format!("UPDATE purchases SET deleted_at = {NOW} WHERE id = ?1"),
-                [id],
+                &format!(
+                    "UPDATE redemptions SET date = ?2, amount_cents = ?3, method = ?4,
+                     fee_cents = ?5, received_date = ?6, note = ?7, updated_at = {NOW}
+                     WHERE id = ?1"
+                ),
+                params![
+                    id,
+                    r.date,
+                    r.amount,
+                    r.method.key(),
+                    r.fee,
+                    r.received,
+                    r.note
+                ],
             )
             .map(|_| ())
             .map_err(err)
     }
 
-    // ---- Redemptions ----
+    /// Marks a pending redemption as received on `date`.
+    pub fn mark_received(&self, id: i64, date: NaiveDate) -> Result<(), String> {
+        self.conn
+            .execute(
+                &format!(
+                    "UPDATE redemptions SET received_date = ?2, updated_at = {NOW} WHERE id = ?1"
+                ),
+                params![id, date],
+            )
+            .map(|_| ())
+            .map_err(err)
+    }
 
-    pub fn add_redemption(
+    pub fn add_free_coins(
         &self,
         casino_id: i64,
         date: NaiveDate,
-        amount: Cents,
+        sc: Cents,
+        source: Source,
         note: &str,
     ) -> Result<i64, String> {
         self.conn
             .execute(
-                "INSERT INTO redemptions (casino_id, date, amount_cents, note) VALUES (?1, ?2, ?3, ?4)",
-                params![casino_id, date, amount, note],
+                "INSERT INTO free_coins (casino_id, date, sc_cents, source, note)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![casino_id, date, sc, source.key(), note],
             )
             .map_err(err)?;
         Ok(self.conn.last_insert_rowid())
     }
 
-    pub fn update_redemption(
+    pub fn update_free_coins(
         &self,
         id: i64,
         date: NaiveDate,
-        amount: Cents,
+        sc: Cents,
+        source: Source,
         note: &str,
     ) -> Result<(), String> {
         self.conn
             .execute(
                 &format!(
-                    "UPDATE redemptions SET date = ?2, amount_cents = ?3, note = ?4,
+                    "UPDATE free_coins SET date = ?2, sc_cents = ?3, source = ?4, note = ?5,
                      updated_at = {NOW} WHERE id = ?1"
                 ),
-                params![id, date, amount, note],
+                params![id, date, sc, source.key(), note],
             )
             .map(|_| ())
             .map_err(err)
     }
 
-    pub fn delete_redemption(&self, id: i64) -> Result<(), String> {
-        self.conn
-            .execute(
-                &format!("UPDATE redemptions SET deleted_at = {NOW} WHERE id = ?1"),
-                [id],
+    /// Deleted casinos, and entries deleted on their own from casinos that still exist,
+    /// newest first.
+    pub fn deleted(&self) -> Result<Deleted, String> {
+        let casinos = self
+            .conn
+            .prepare(
+                "SELECT c.id, c.name, c.deleted_at,
+                        (SELECT count(*) FROM purchases p WHERE p.casino_id = c.id AND p.deleted_with_casino = 1)
+                      + (SELECT count(*) FROM redemptions r WHERE r.casino_id = c.id AND r.deleted_with_casino = 1)
+                      + (SELECT count(*) FROM free_coins f WHERE f.casino_id = c.id AND f.deleted_with_casino = 1)
+                 FROM casinos c WHERE c.deleted_at IS NOT NULL ORDER BY c.deleted_at DESC",
             )
-            .map(|_| ())
-            .map_err(err)
+            .map_err(err)?
+            .query_map([], |r| {
+                Ok(DeletedCasino {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    deleted_at: r.get(2)?,
+                    entries: r.get(3)?,
+                })
+            })
+            .map_err(err)?
+            .collect::<Result<_, _>>()
+            .map_err(err)?;
+
+        let mut entries: Vec<DeletedEntry> = Vec::new();
+        let queries: [(&str, &str, fn(i64) -> EntryRef); 3] = [
+            ("purchases", "spent_cents", EntryRef::Purchase),
+            ("redemptions", "amount_cents", EntryRef::Redemption),
+            ("free_coins", "sc_cents", EntryRef::FreeCoins),
+        ];
+        for (table, amount, kind) in queries {
+            let mut stmt = self
+                .conn
+                .prepare(&format!(
+                    "SELECT e.id, c.name, e.date, e.{amount}, e.deleted_at FROM {table} e
+                     JOIN casinos c ON c.id = e.casino_id
+                     WHERE e.deleted_at IS NOT NULL AND c.deleted_at IS NULL"
+                ))
+                .map_err(err)?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(DeletedEntry {
+                        entry: kind(r.get(0)?),
+                        casino: r.get(1)?,
+                        date: r.get(2)?,
+                        amount: r.get(3)?,
+                        deleted_at: r.get(4)?,
+                    })
+                })
+                .map_err(err)?;
+            for row in rows {
+                entries.push(row.map_err(err)?);
+            }
+        }
+        entries.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+        Ok(Deleted { casinos, entries })
     }
 
     // ---- Import / backup ----
 
     /// Adds pasted spreadsheet rows in one transaction: a row's spent/CC becomes a purchase
-    /// and its withdrawal a redemption.
+    /// and its withdrawal a (received, bank) redemption.
     pub fn import_rows(&mut self, casino_id: i64, rows: &[ParsedRow]) -> Result<(), String> {
         let tx = self.conn.transaction().map_err(err)?;
         for r in rows {
@@ -429,7 +695,18 @@ impl Store {
     }
 }
 
-/// Inserts the purchase and/or redemption described by one combined row.
+fn insert_redemption(conn: &Connection, casino_id: i64, r: &RedemptionInput) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO redemptions (casino_id, date, amount_cents, method, fee_cents, received_date, note)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![casino_id, r.date, r.amount, r.method.key(), r.fee, r.received, r.note],
+    )
+    .map(|_| ())
+    .map_err(err)
+}
+
+/// Inserts the purchase and/or redemption described by one combined (spreadsheet) row.
+/// Imported redemptions are assumed received by bank on their date.
 fn insert_parts(
     conn: &Connection,
     casino_id: i64,
@@ -448,11 +725,15 @@ fn insert_parts(
         .map_err(err)?;
     }
     if withdrawal > 0 {
-        conn.execute(
-            "INSERT INTO redemptions (casino_id, date, amount_cents, note) VALUES (?1, ?2, ?3, ?4)",
-            params![casino_id, date, withdrawal, note],
-        )
-        .map_err(err)?;
+        let r = RedemptionInput {
+            date,
+            amount: withdrawal,
+            method: Method::Bank,
+            fee: 0,
+            received: Some(date),
+            note: note.to_string(),
+        };
+        insert_redemption(conn, casino_id, &r)?;
     }
     Ok(())
 }
@@ -482,6 +763,17 @@ mod tests {
         NaiveDate::from_ymd_opt(2026, 3, d).unwrap()
     }
 
+    fn redemption(date: NaiveDate, amount: Cents) -> RedemptionInput {
+        RedemptionInput {
+            date,
+            amount,
+            method: Method::Bank,
+            fee: 0,
+            received: Some(date),
+            note: String::new(),
+        }
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sweeps-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -493,7 +785,7 @@ mod tests {
         let mut s = Store::in_memory();
         let modo = s.add_casino("Modo").unwrap();
         let p = s.add_purchase(modo, day(13), 8500, 10000, "first").unwrap();
-        s.add_redemption(modo, day(14), 50000, "").unwrap();
+        s.add_redemption(modo, &redemption(day(14), 50000)).unwrap();
         s.update_purchase(p, day(13), 9000, 10000, "fixed").unwrap();
 
         let data = s.load().unwrap();
@@ -502,7 +794,7 @@ mod tests {
         assert_eq!(c.purchases[0].note, "fixed");
         assert_eq!(c.stats().net(), 41000);
 
-        s.delete_purchase(p).unwrap();
+        s.delete_entry(EntryRef::Purchase(p)).unwrap();
         assert!(s.load().unwrap().casinos[0].purchases.is_empty());
         // Soft delete: the row is still in the table.
         let kept: i64 = s
@@ -522,6 +814,116 @@ mod tests {
     }
 
     #[test]
+    fn stores_redemption_tax_fields_and_free_coins() {
+        let s = Store::in_memory();
+        let id = s.add_casino("McLuck").unwrap();
+        let pending = RedemptionInput {
+            method: Method::GiftCard,
+            fee: 150,
+            received: None,
+            note: "amazon".into(),
+            ..redemption(day(20), 10000)
+        };
+        let r = s.add_redemption(id, &pending).unwrap();
+        s.add_free_coins(id, day(21), 250, Source::MailIn, "postcard")
+            .unwrap();
+
+        let c = &s.load().unwrap().casinos[0];
+        let got = &c.redemptions[0];
+        assert_eq!(
+            (got.method, got.fee, got.received),
+            (Method::GiftCard, 150, None)
+        );
+        assert!(got.is_pending());
+        assert_eq!(c.free_coins[0].source, Source::MailIn);
+        assert_eq!(c.free_coins[0].sc, 250);
+
+        s.mark_received(r, day(25)).unwrap();
+        assert_eq!(
+            s.load().unwrap().casinos[0].redemptions[0].received,
+            Some(day(25))
+        );
+    }
+
+    #[test]
+    fn upgrades_a_version_1_database() {
+        let mut s = Store {
+            conn: Connection::open_in_memory().unwrap(),
+        };
+        // Build a version-1 database with a casino deleted along with one of its entries.
+        s.conn.execute_batch(MIGRATIONS[0]).unwrap();
+        s.conn.pragma_update(None, "user_version", 1).unwrap();
+        s.conn
+            .execute_batch(
+                "INSERT INTO casinos (id, name) VALUES (1, 'Zoot');
+                 INSERT INTO redemptions (casino_id, date, amount_cents) VALUES (1, '2026-03-10', 5000);
+                 INSERT INTO casinos (id, name, deleted_at) VALUES (2, 'Old', '2026-03-01T00:00:00.000Z');
+                 INSERT INTO purchases (casino_id, date, spent_cents, cc_received_cents, deleted_at)
+                     VALUES (2, '2026-02-01', 100, 100, '2026-03-01T00:00:00.000Z');",
+            )
+            .unwrap();
+        s.migrate().unwrap();
+
+        let r = &s.load().unwrap().casinos[0].redemptions[0];
+        assert_eq!(
+            (r.method, r.fee, r.received),
+            (Method::Bank, 0, Some(day(10)))
+        );
+        // The old casino's entry is recognized as deleted with it, so restoring brings it back.
+        s.restore_casino(2).unwrap();
+        let old = s
+            .load()
+            .unwrap()
+            .casinos
+            .into_iter()
+            .find(|c| c.id == 2)
+            .unwrap();
+        assert_eq!(old.purchases.len(), 1);
+    }
+
+    #[test]
+    fn restores_casinos_and_entries() {
+        let mut s = Store::in_memory();
+        let modo = s.add_casino("Modo").unwrap();
+        let early = s.add_purchase(modo, day(1), 1000, 1000, "").unwrap();
+        s.add_purchase(modo, day(2), 2000, 2000, "").unwrap();
+        s.add_redemption(modo, &redemption(day(3), 5000)).unwrap();
+        s.add_free_coins(modo, day(3), 100, Source::Daily, "")
+            .unwrap();
+        s.delete_entry(EntryRef::Purchase(early)).unwrap(); // deleted on its own first
+
+        let listed = s.deleted().unwrap();
+        assert_eq!(listed.entries.len(), 1);
+        assert_eq!(listed.entries[0].entry, EntryRef::Purchase(early));
+        assert_eq!(listed.entries[0].casino, "Modo");
+
+        s.delete_casino(modo).unwrap();
+        let listed = s.deleted().unwrap();
+        assert_eq!(listed.casinos.len(), 1);
+        assert_eq!(listed.casinos[0].entries, 3);
+        // Entries of a deleted casino are listed under the casino, not on their own.
+        assert!(listed.entries.is_empty());
+
+        s.restore_casino(modo).unwrap();
+        let c = &s.load().unwrap().casinos[0];
+        assert_eq!(
+            (c.purchases.len(), c.redemptions.len(), c.free_coins.len()),
+            (1, 1, 1)
+        );
+        // The purchase deleted on its own earlier is still deleted, and restorable.
+        s.restore_entry(EntryRef::Purchase(early)).unwrap();
+        assert_eq!(s.load().unwrap().casinos[0].purchases.len(), 2);
+
+        // Restoring fails cleanly if the name has been reused meanwhile.
+        s.delete_casino(modo).unwrap();
+        s.add_casino("modo").unwrap();
+        assert_eq!(
+            s.restore_casino(modo).unwrap_err(),
+            "You already have a casino with that name."
+        );
+    }
+
+    #[test]
     fn rejects_duplicate_names_and_bad_amounts() {
         let s = Store::in_memory();
         let id = s.add_casino("Zoot").unwrap();
@@ -529,8 +931,14 @@ mod tests {
             s.add_casino("zoot").unwrap_err(),
             "You already have a casino with that name."
         );
-        assert!(s.add_redemption(id, day(1), 0, "").is_err());
+        assert!(s.add_redemption(id, &redemption(day(1), 0)).is_err());
         assert!(s.add_purchase(id, day(1), -5, 100, "").is_err());
+        assert!(s.add_free_coins(id, day(1), 0, Source::Daily, "").is_err());
+        let negative_fee = RedemptionInput {
+            fee: -1,
+            ..redemption(day(1), 100)
+        };
+        assert!(s.add_redemption(id, &negative_fee).is_err());
     }
 
     #[test]
@@ -546,6 +954,8 @@ mod tests {
         assert_eq!(c.redemptions.len(), 2);
         assert_eq!(c.stats().spent, 10800);
         assert_eq!(c.stats().withdrawn, 54000);
+        assert_eq!(c.redemptions[0].received, Some(day(14)));
+        assert_eq!(c.redemptions[0].method, Method::Bank);
     }
 
     #[test]
@@ -589,6 +999,30 @@ mod tests {
         drop(first);
         assert!(Store::open(&dir).is_ok());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Dev check against a real project folder (use a copy):
+    /// PROJECT_DIR=path cargo test opens_project_from_env -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn opens_project_from_env() {
+        let dir = PathBuf::from(std::env::var("PROJECT_DIR").expect("set PROJECT_DIR"));
+        let s = Store::open(&dir).unwrap();
+        let version: i64 = s
+            .conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        let data = s.load().unwrap();
+        println!("schema version {version}");
+        for c in &data.casinos {
+            println!(
+                "{}: {} purchases, {} redemptions, {} free SC",
+                c.name,
+                c.purchases.len(),
+                c.redemptions.len(),
+                c.free_coins.len()
+            );
+        }
     }
 
     #[test]

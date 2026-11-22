@@ -8,42 +8,93 @@ impl App {
         if let Some(ed) = &mut self.editing {
             let mut close = false;
             let mut save = false;
-            let is_purchase = matches!(ed.row, RowRef::Purchase(_));
-            let title = if is_purchase {
-                "Edit purchase"
-            } else {
-                "Edit withdrawal"
+            let title = match ed.row {
+                EntryRef::Purchase(_) => "Edit purchase",
+                EntryRef::Redemption(_) => "Edit withdrawal",
+                EntryRef::FreeCoins(_) => "Edit free SC",
             };
+            let ok = |t: &str| t.trim().is_empty() || parse_cents(t).is_some_and(|v| v >= 0);
+            let cents = |t: &str| parse_cents(t).unwrap_or(0);
             dialog(ctx, title, |ui| {
                 egui::Grid::new("edit_grid")
                     .num_columns(2)
                     .spacing([12.0, 8.0])
                     .show(ui, |ui| {
-                        ui.label(dim("DATE"));
+                        let date_label = match ed.row {
+                            EntryRef::Redemption(_) => "REQUESTED",
+                            _ => "DATE",
+                        };
+                        ui.label(dim(date_label));
                         ui.add(date_picker(&mut ed.date, "edit_date"));
                         ui.end_row();
-                        if is_purchase {
-                            ui.label(dim("SPENT $"));
-                            amount_field(ui, &mut ed.spent, "0", 120.0);
-                            ui.end_row();
-                            ui.label(dim("CC RECEIVED"));
-                            amount_field(ui, &mut ed.cc, "0", 120.0);
-                            ui.end_row();
-                        } else {
-                            ui.label(dim("AMOUNT $"));
-                            amount_field(ui, &mut ed.amount, "0", 120.0);
-                            ui.end_row();
+                        match ed.row {
+                            EntryRef::Purchase(_) => {
+                                ui.label(dim("SPENT $"));
+                                amount_field(ui, &mut ed.spent, "0", 160.0);
+                                ui.end_row();
+                                ui.label(dim("CC RECEIVED"));
+                                amount_field(ui, &mut ed.cc, "0", 160.0);
+                                ui.end_row();
+                            }
+                            EntryRef::Redemption(_) => {
+                                ui.label(dim("AMOUNT $"));
+                                amount_field(ui, &mut ed.amount, "0", 160.0);
+                                ui.end_row();
+                                ui.label(dim("METHOD"));
+                                choice(
+                                    ui,
+                                    "edit_method",
+                                    &mut ed.method,
+                                    &Method::ALL,
+                                    Method::label,
+                                    160.0,
+                                );
+                                ui.end_row();
+                                ui.label(dim("FEE $"));
+                                amount_field(ui, &mut ed.fee, "0", 160.0);
+                                ui.end_row();
+                                ui.label(dim("STATUS"));
+                                choice(
+                                    ui,
+                                    "edit_status",
+                                    &mut ed.received,
+                                    &[true, false],
+                                    status_label,
+                                    160.0,
+                                );
+                                ui.end_row();
+                                if ed.received {
+                                    ui.label(dim("RECEIVED"));
+                                    ui.add(date_picker(&mut ed.received_date, "edit_received"));
+                                    ui.end_row();
+                                }
+                            }
+                            EntryRef::FreeCoins(_) => {
+                                ui.label(dim("SC"));
+                                amount_field(ui, &mut ed.sc, "0", 160.0);
+                                ui.end_row();
+                                ui.label(dim("SOURCE"));
+                                choice(
+                                    ui,
+                                    "edit_source",
+                                    &mut ed.source,
+                                    &Source::ALL,
+                                    Source::label,
+                                    160.0,
+                                );
+                                ui.end_row();
+                            }
                         }
                         ui.label(dim("NOTE"));
-                        theme::input(ui, egui::TextEdit::singleline(&mut ed.note), 200.0);
+                        theme::input(ui, egui::TextEdit::singleline(&mut ed.note), 220.0);
                         ui.end_row();
                     });
-                let ok = |t: &str| t.trim().is_empty() || parse_cents(t).is_some_and(|v| v >= 0);
-                let cents = |t: &str| parse_cents(t).unwrap_or(0);
-                let valid = if is_purchase {
-                    ok(&ed.spent) && ok(&ed.cc) && (cents(&ed.spent) > 0 || cents(&ed.cc) > 0)
-                } else {
-                    cents(&ed.amount) > 0
+                let valid = match ed.row {
+                    EntryRef::Purchase(_) => {
+                        ok(&ed.spent) && ok(&ed.cc) && (cents(&ed.spent) > 0 || cents(&ed.cc) > 0)
+                    }
+                    EntryRef::Redemption(_) => cents(&ed.amount) > 0 && ok(&ed.fee),
+                    EntryRef::FreeCoins(_) => cents(&ed.sc) > 0,
                 };
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -53,12 +104,27 @@ impl App {
                 });
             });
             if save {
-                let cents = |t: &str| parse_cents(t).unwrap_or(0);
-                let (row, date, note) = (ed.row, ed.date, ed.note.trim().to_string());
-                let (spent, cc, amount) = (cents(&ed.spent), cents(&ed.cc), cents(&ed.amount));
-                let result = match row {
-                    RowRef::Purchase(id) => self.db().update_purchase(id, date, spent, cc, &note),
-                    RowRef::Redemption(id) => self.db().update_redemption(id, date, amount, &note),
+                let (date, note) = (ed.date, ed.note.trim().to_string());
+                let result = match ed.row {
+                    EntryRef::Purchase(id) => {
+                        let (spent, cc) = (cents(&ed.spent), cents(&ed.cc));
+                        self.db().update_purchase(id, date, spent, cc, &note)
+                    }
+                    EntryRef::Redemption(id) => {
+                        let r = store::RedemptionInput {
+                            date,
+                            amount: cents(&ed.amount),
+                            method: ed.method,
+                            fee: cents(&ed.fee),
+                            received: ed.received.then_some(ed.received_date),
+                            note,
+                        };
+                        self.db().update_redemption(id, &r)
+                    }
+                    EntryRef::FreeCoins(id) => {
+                        let (sc, source) = (cents(&ed.sc), ed.source);
+                        self.db().update_free_coins(id, date, sc, source, &note)
+                    }
                 };
                 self.apply(result);
             }
@@ -94,6 +160,7 @@ impl App {
                     spent: rows.iter().map(|r| r.spent).sum(),
                     cc_received: rows.iter().map(|r| r.cc_received).sum(),
                     withdrawn: rows.iter().map(|r| r.withdrawal).sum(),
+                    ..Stats::default()
                 };
                 ui.label(format!(
                     "{} rows found — spent {}, {} CC, withdrawn {}",
@@ -152,9 +219,7 @@ impl App {
             let mut delete = false;
             dialog(ctx, "Delete casino?", |ui| {
                 ui.label(format!("Delete {name} and all of its entries?"));
-                ui.label(
-                    dim("They're hidden from the app but kept in the project's database.").small(),
-                );
+                ui.label(dim("You can restore it from Recently deleted in the sidebar.").small());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     delete = theme::button(ui, RichText::new("Delete").color(LOSS)).clicked();

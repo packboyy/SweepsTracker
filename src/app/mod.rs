@@ -7,13 +7,15 @@ mod overview;
 mod picker;
 mod project;
 mod sidebar;
+mod taxes;
+mod trash;
 
 use crate::grail::{self, GrailCasino, GrailDb};
 use crate::model::*;
-use crate::store::{self, Store};
+use crate::store::{self, Deleted, EntryRef, Store};
 use crate::theme::{self, ACCENT, DIM, GAIN, LOSS, PRIMARY};
 use crate::titlebar;
-use chrono::{Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate};
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Key, Layout, RichText, Sense, Stroke, Vec2,
 };
@@ -25,39 +27,50 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Overview,
+    Taxes,
     Casino(i64),
+    /// "Recently deleted"
+    Trash,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Purchase,
     Withdrawal,
+    FreeSc,
 }
 
+/// New-entry form. Purchases use `spent` + `cc`; withdrawals `amount`, `method`, `fee`,
+/// `received`; free SC `sc` + `source`.
 struct EntryForm {
     kind: Kind,
     date: NaiveDate,
     spent: String,
     cc: String,
     amount: String,
+    method: Method,
+    fee: String,
+    /// Received now (true) or still pending.
+    received: bool,
+    sc: String,
+    source: Source,
     note: String,
     focus_first: bool,
 }
 
-/// Which row an edit / delete applies to.
-#[derive(Clone, Copy, PartialEq)]
-enum RowRef {
-    Purchase(i64),
-    Redemption(i64),
-}
-
 /// Edit dialog state. Purchases use `spent` + `cc`; redemptions use `amount`.
 struct EditState {
-    row: RowRef,
+    row: EntryRef,
     date: NaiveDate,
     spent: String,
     cc: String,
     amount: String,
+    method: Method,
+    fee: String,
+    received: bool,
+    received_date: NaiveDate,
+    sc: String,
+    source: Source,
     note: String,
 }
 
@@ -85,6 +98,10 @@ enum ProjectAction {
 pub struct App {
     /// In-memory copy of the open project, reloaded from `store` after every change.
     data: Data,
+    /// Soft-deleted casinos and entries, for "Recently deleted" (reloaded with `data`).
+    deleted: Deleted,
+    /// Year shown on the Taxes page.
+    tax_year: i32,
     /// Open project folder (holds sweeps.db and backups/). None shows the welcome screen.
     project: Option<PathBuf>,
     /// Database of the open project (Some whenever `project` is).
@@ -102,14 +119,18 @@ pub struct App {
     pasting: Option<(i64, String)>,
     renaming: Option<(i64, String)>,
     confirm_delete: Option<i64>,
+    /// Error message shown in a red bar at the bottom.
     status: Option<String>,
+    /// Success message (e.g. "Exported to …") shown in a green bar at the bottom.
+    notice: Option<String>,
 }
 
-/// Date picker button styled for the app: no red weekend highlighting (egui hard-codes
-/// that color) and no week-number column.
+/// Date picker button styled for the app: US date format (like the table and spreadsheet),
+/// no red weekend highlighting (egui hard-codes that color) and no week-number column.
 fn date_picker<'a>(date: &'a mut NaiveDate, id: &'a str) -> DatePickerButton<'a> {
     DatePickerButton::new(date)
         .id_salt(id)
+        .format("%-m/%-d/%Y")
         .highlight_weekends(false)
         .calendar_week(false)
 }
@@ -140,6 +161,37 @@ fn amount_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) ->
         edit = edit.text_color(LOSS);
     }
     theme::input(ui, edit, width)
+}
+
+/// Dropdown with a hard shadow like the other controls, `width` wide.
+fn choice<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    id: &str,
+    value: &mut T,
+    options: &[T],
+    label: fn(T) -> &'static str,
+    width: f32,
+) -> egui::Response {
+    theme::shadowed(ui, |ui| {
+        egui::ComboBox::from_id_salt(id)
+            .width(width - 2.0 * ui.spacing().button_padding.x)
+            .selected_text(label(*value))
+            .show_ui(ui, |ui| {
+                for &option in options {
+                    ui.selectable_value(value, option, label(option));
+                }
+            })
+            .response
+    })
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+fn status_label(received: bool) -> &'static str {
+    if received {
+        "Received"
+    } else {
+        "Pending"
+    }
 }
 
 /// Padding inside the flush grid cells of the totals and entry boxes.
@@ -205,8 +257,23 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
             for col in cols.iter_mut() {
                 col.spacing_mut().item_spacing = Vec2::ZERO;
             }
-            let bonus =
-                (stats.bonus_coins() > 0).then(|| format!("+{} bonus", coins(stats.bonus_coins())));
+            // Small notes beside the values: discount bonus and free SC by the coins,
+            // pending payouts and fees by the withdrawals.
+            let join = |parts: Vec<String>| (!parts.is_empty()).then(|| parts.join(" · "));
+            let mut coin_notes = Vec::new();
+            if stats.bonus_coins() > 0 {
+                coin_notes.push(format!("+{} bonus", coins(stats.bonus_coins())));
+            }
+            if stats.free_sc > 0 {
+                coin_notes.push(format!("{} free SC", coins(stats.free_sc)));
+            }
+            let mut payout_notes = Vec::new();
+            if stats.pending > 0 {
+                payout_notes.push(format!("{} pending", money(stats.pending)));
+            }
+            if stats.fees > 0 {
+                payout_notes.push(format!("{} fees", money(stats.fees)));
+            }
             stat_cell(
                 &mut cols[0],
                 true,
@@ -220,7 +287,7 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
                 false,
                 "CC RECEIVED",
                 coins(stats.cc_received),
-                bonus,
+                join(coin_notes),
                 PRIMARY,
             );
             stat_cell(
@@ -228,7 +295,7 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
                 false,
                 "WITHDRAWN",
                 money(stats.withdrawn),
-                None,
+                join(payout_notes),
                 PRIMARY,
             );
             stat_cell(
@@ -290,6 +357,7 @@ impl App {
             .then(|| grail::fetch_in_background(ctx.clone(), GrailDb::path()));
         let mut app = App {
             data: Data::default(),
+            deleted: Deleted::default(),
             project: None,
             store: None,
             config,
@@ -310,14 +378,21 @@ impl App {
                 spent: String::new(),
                 cc: String::new(),
                 amount: String::new(),
+                method: Method::Bank,
+                fee: String::new(),
+                received: true,
+                sc: String::new(),
+                source: Source::Daily,
                 note: String::new(),
                 focus_first: false,
             },
+            tax_year: today().year(),
             editing: None,
             pasting: None,
             renaming: None,
             confirm_delete: None,
             status: None,
+            notice: None,
         };
         if let Some(dir) = start {
             app.open_project(ctx, &dir);
@@ -333,8 +408,11 @@ impl App {
     /// Reloads the in-memory data after a database change.
     fn reload(&mut self) {
         let Some(store) = &self.store else { return };
-        match store.load() {
-            Ok(data) => self.data = data,
+        match store.load().and_then(|data| Ok((data, store.deleted()?))) {
+            Ok((data, deleted)) => {
+                self.data = data;
+                self.deleted = deleted;
+            }
             Err(e) => self.status = Some(format!("Couldn't load the project: {e}")),
         }
     }
@@ -391,6 +469,50 @@ impl App {
     }
 }
 
+/// Read-only flush-grid table: equal-width columns that always fit, alternate rows tinted,
+/// each cell (text, color) truncated with the full text on hover.
+fn data_table(ui: &mut egui::Ui, headers: &[&str], rows: Vec<Vec<(String, Color32)>>, empty: &str) {
+    let pad = Vec2::new(10.0, 6.0);
+    theme::boxed_flush(ui, |ui| {
+        ui.columns(headers.len(), |cols| {
+            for (c, (col, h)) in cols.iter_mut().zip(headers).enumerate() {
+                col.spacing_mut().item_spacing = Vec2::ZERO;
+                theme::grid_cell(col, c == 0, true, None, pad, |ui| {
+                    ui.add(egui::Label::new(dim(*h).small()).truncate());
+                });
+            }
+        });
+        if rows.is_empty() {
+            theme::grid_cell(ui, true, false, None, Vec2::new(10.0, 12.0), |ui| {
+                ui.label(dim(empty));
+            });
+        }
+        for (r, row) in rows.into_iter().enumerate() {
+            let fill = (r % 2 == 1).then_some(theme::STRIPE);
+            ui.columns(headers.len(), |cols| {
+                for (c, (col, (text, color))) in cols.iter_mut().zip(row).enumerate() {
+                    col.spacing_mut().item_spacing = Vec2::ZERO;
+                    theme::grid_cell(col, c == 0, false, fill, pad, |ui| {
+                        ui.add(egui::Label::new(RichText::new(text).color(color)).truncate());
+                    });
+                }
+            });
+        }
+    });
+    ui.add_space(theme::SHADOW);
+}
+
+/// A stored UTC timestamp (2026-11-22T03:40:12.123Z) as local time: "11/21/2026 9:40 PM".
+fn local_time(utc: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(utc)
+        .map(|t| {
+            t.with_timezone(&Local)
+                .format("%-m/%-d/%Y %-I:%M %p")
+                .to_string()
+        })
+        .unwrap_or_else(|_| utc.to_string())
+}
+
 /// "just now", "5 min ago", "3 h ago", "2 days ago"
 fn ago(unix_secs: i64) -> String {
     let secs = (chrono::Utc::now().timestamp() - unix_secs).max(0);
@@ -434,12 +556,19 @@ impl eframe::App for App {
             self.action = Some(ProjectAction::Open);
         }
 
-        if self.status.is_some() {
+        // Bottom bar: errors in red, otherwise success notices in green.
+        let message = match (&self.status, &self.notice) {
+            (Some(e), _) => Some((e.clone(), LOSS)),
+            (None, Some(n)) => Some((n.clone(), GAIN)),
+            _ => None,
+        };
+        if let Some((text, color)) = message {
             egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(self.status.as_deref().unwrap_or_default()).color(LOSS));
+                    ui.label(RichText::new(text).color(color));
                     if theme::button(ui, "✕").clicked() {
                         self.status = None;
+                        self.notice = None;
                     }
                 });
             });
@@ -477,6 +606,8 @@ impl eframe::App for App {
             .show(ctx, |ui| match self.view {
                 View::Overview => self.overview(ui),
                 View::Casino(id) => self.casino_view(ui, id),
+                View::Trash => self.trash(ui),
+                View::Taxes => self.taxes(ui),
             });
 
         self.casino_picker(ctx);

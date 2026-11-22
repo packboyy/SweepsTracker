@@ -30,12 +30,119 @@ impl Purchase {
     }
 }
 
-/// A withdrawal / prize redemption.
+/// How a redemption was paid out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Method {
+    #[default]
+    Bank,
+    GiftCard,
+    Crypto,
+}
+
+impl Method {
+    pub const ALL: [Method; 3] = [Method::Bank, Method::GiftCard, Method::Crypto];
+
+    /// Value stored in the database.
+    pub fn key(self) -> &'static str {
+        match self {
+            Method::Bank => "bank",
+            Method::GiftCard => "gift_card",
+            Method::Crypto => "crypto",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Method {
+        Method::ALL
+            .into_iter()
+            .find(|m| m.key() == key)
+            .unwrap_or_default()
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Method::Bank => "Bank",
+            Method::GiftCard => "Gift card",
+            Method::Crypto => "Crypto",
+        }
+    }
+}
+
+/// A withdrawal / prize redemption. `date` is when it was requested; `received` is when the
+/// money arrived (None while pending). For taxes, income counts in the year it's received.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Redemption {
     pub id: i64,
     pub date: NaiveDate,
     pub amount: Cents,
+    pub method: Method,
+    /// Taken out of the payout by the casino or processor.
+    pub fee: Cents,
+    pub received: Option<NaiveDate>,
+    pub note: String,
+}
+
+impl Redemption {
+    pub fn is_pending(&self) -> bool {
+        self.received.is_none()
+    }
+}
+
+/// Where free sweeps coins came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Source {
+    #[default]
+    Daily,
+    Signup,
+    MailIn,
+    Promo,
+    Other,
+}
+
+impl Source {
+    pub const ALL: [Source; 5] = [
+        Source::Daily,
+        Source::Signup,
+        Source::MailIn,
+        Source::Promo,
+        Source::Other,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Source::Daily => "daily",
+            Source::Signup => "signup",
+            Source::MailIn => "mail_in",
+            Source::Promo => "promo",
+            Source::Other => "other",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Source {
+        Source::ALL
+            .into_iter()
+            .find(|s| s.key() == key)
+            .unwrap_or_default()
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Daily => "Daily login",
+            Source::Signup => "Signup",
+            Source::MailIn => "Mail-in",
+            Source::Promo => "Promo",
+            Source::Other => "Other",
+        }
+    }
+}
+
+/// Free sweeps coins (no purchase): daily logins, signup bonuses, mail-in requests...
+#[derive(Clone, Debug, PartialEq)]
+pub struct FreeCoins {
+    pub id: i64,
+    pub date: NaiveDate,
+    /// Hundredths of a coin.
+    pub sc: Cents,
+    pub source: Source,
     pub note: String,
 }
 
@@ -45,6 +152,7 @@ pub struct Casino {
     pub name: String,
     pub purchases: Vec<Purchase>,
     pub redemptions: Vec<Redemption>,
+    pub free_coins: Vec<FreeCoins>,
 }
 
 impl Casino {
@@ -55,7 +163,7 @@ impl Casino {
     }
 
     pub fn entry_count(&self) -> usize {
-        self.purchases.len() + self.redemptions.len()
+        self.purchases.len() + self.redemptions.len() + self.free_coins.len()
     }
 }
 
@@ -92,7 +200,7 @@ impl Data {
                 *by_day.entry(p.date).or_default() -= p.spent;
             }
             for r in &c.redemptions {
-                *by_day.entry(r.date).or_default() += r.amount;
+                *by_day.entry(r.date).or_default() += r.amount - r.fee;
             }
         }
         by_day
@@ -103,7 +211,12 @@ impl Data {
 pub struct Stats {
     pub spent: Cents,
     pub cc_received: Cents,
+    /// All redemptions, received or not.
     pub withdrawn: Cents,
+    pub fees: Cents,
+    /// Redemptions not received yet (included in `withdrawn`).
+    pub pending: Cents,
+    pub free_sc: Cents,
 }
 
 impl Stats {
@@ -114,12 +227,19 @@ impl Stats {
         }
         for r in &c.redemptions {
             self.withdrawn += r.amount;
+            self.fees += r.fee;
+            if r.is_pending() {
+                self.pending += r.amount;
+            }
+        }
+        for f in &c.free_coins {
+            self.free_sc += f.sc;
         }
     }
 
-    /// Money out minus money in.
+    /// Money out (after fees) minus money in.
     pub fn net(&self) -> Cents {
-        self.withdrawn - self.spent
+        self.withdrawn - self.fees - self.spent
     }
 
     /// Extra coins gained from buying at a discount.
@@ -408,17 +528,29 @@ mod tests {
                 id: 1,
                 date: d,
                 amount: 28000,
+                method: Method::Bank,
+                fee: 500,
+                received: None,
+                note: String::new(),
+            }],
+            free_coins: vec![FreeCoins {
+                id: 1,
+                date: d,
+                sc: 250,
+                source: Source::Daily,
                 note: String::new(),
             }],
         };
         assert_eq!(casino.purchases[0].discount(), Some(0.15));
         let s = casino.stats();
-        assert_eq!(s.net(), 19500);
+        assert_eq!(s.net(), 19000); // 280 - 5 fee - 85
+        assert_eq!(s.pending, 28000);
+        assert_eq!(s.free_sc, 250);
         assert_eq!(s.bonus_coins(), 1500);
         let data = Data {
             casinos: vec![casino],
         };
-        assert_eq!(data.daily_net()[&d], 19500);
+        assert_eq!(data.daily_net()[&d], 19000);
     }
 
     #[test]
