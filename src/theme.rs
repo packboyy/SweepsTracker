@@ -159,6 +159,12 @@ pub fn shadowed_in(
     resp
 }
 
+/// `color` at 60% brightness (e.g. deep red under a red button).
+pub fn darker(color: Color32) -> Color32 {
+    let f = |c: u8| (c as f32 * 0.6) as u8;
+    Color32::from_rgb(f(color.r()), f(color.g()), f(color.b()))
+}
+
 /// Button whose border, shadow and text all use `color`; `filled` makes it solid `color`
 /// with white text. Used for destructive (red) and call-to-action buttons so the button
 /// is one color instead of colored text in a periwinkle box.
@@ -167,7 +173,10 @@ pub fn colored_button(ui: &mut egui::Ui, text: &str, color: Color32, filled: boo
     let button = egui::Button::new(egui::RichText::new(text).color(text_color))
         .fill(fill)
         .stroke(Stroke::new(BORDER, color));
-    shadowed_in(ui, color, |ui| ui.add(button)).on_hover_cursor(egui::CursorIcon::PointingHand)
+    // A solid button's shadow in its own color just reads as a thicker button; a darker
+    // shade makes it look raised like the outlined ones.
+    let shadow = if filled { darker(color) } else { color };
+    shadowed_in(ui, shadow, |ui| ui.add(button)).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 pub fn button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> Response {
@@ -830,7 +839,7 @@ pub fn primary_button(ui: &mut egui::Ui, enabled: bool, text: &str, width: f32) 
     let button = egui::Button::new(egui::RichText::new(text).color(BG))
         .fill(PRIMARY)
         .min_size(Vec2::new(width, control_height(ui)));
-    let resp = shadowed(ui, |ui| ui.add_enabled(enabled, button));
+    let resp = shadowed_in(ui, darker(PRIMARY), |ui| ui.add_enabled(enabled, button));
     if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
