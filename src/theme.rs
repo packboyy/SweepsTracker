@@ -306,12 +306,13 @@ pub fn tab_bar(
 
 /// Sidebar row drawn as a button: bold text, 2px border, hard shadow that presses in on
 /// hover/click, and a ▸ arrow. The selected row is filled primary with white text.
-/// An optional logo URL is drawn before the text.
+/// An optional logo URL is drawn before the text, and an optional badge (e.g. "21+") after it.
 pub fn list_item(
     ui: &mut egui::Ui,
     text: &str,
     selected: bool,
     logo_url: Option<&str>,
+    badge: Option<&str>,
     trailing: Option<(String, Color32)>,
 ) -> Response {
     let font = FontId::new(15.0, bold());
@@ -347,13 +348,16 @@ pub fn list_item(
         logo_at(ui, url, logo_rect);
         x += size + 8.0;
     }
-    p.text(
+    let text_rect = p.text(
         egui::pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         text,
         font,
         text_color,
     );
+    if let Some(badge) = badge {
+        paint_badge(ui, egui::pos2(text_rect.right() + 6.0, rect.center().y), badge, text_color);
+    }
 
     // ▸ arrow at the right edge.
     let arrow_x = rect.right() - 12.0;
@@ -689,6 +693,22 @@ pub fn paint_tier(p: &egui::Painter, rect: Rect, tier: &str) {
         FontId::new(rect.height() * 0.6, bold()),
         BG,
     );
+}
+
+/// Small outlined badge (e.g. "21+") painted with its left edge at `left_center`.
+fn paint_badge(ui: &egui::Ui, left_center: egui::Pos2, text: &str, color: Color32) {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        FontId::new(11.0, bold()),
+        color,
+    );
+    let rect = Rect::from_min_size(
+        egui::pos2(left_center.x, left_center.y - galley.size().y / 2.0 - 1.0),
+        galley.size() + Vec2::new(8.0, 2.0),
+    );
+    let p = ui.painter();
+    p.rect_stroke(rect.shrink(0.5), 0.0, Stroke::new(1.0_f32, color));
+    p.galley(rect.min + Vec2::new(4.0, 1.0), galley, color);
 }
 
 /// Small outlined tag, e.g. "NEW".

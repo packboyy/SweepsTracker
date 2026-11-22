@@ -270,7 +270,7 @@ impl App {
                 ui.add_space(6.0);
                 ui.spacing_mut().item_spacing.y = 8.0;
                 for dir in &self.config.recent {
-                    if theme::list_item(ui, &project_name(dir), false, None, None)
+                    if theme::list_item(ui, &project_name(dir), false, None, None, None)
                         .on_hover_text(dir.display().to_string())
                         .clicked()
                     {

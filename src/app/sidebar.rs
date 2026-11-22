@@ -65,7 +65,11 @@ impl App {
                             .cache
                             .listing(&self.grail, casino.id)
                             .map(|g| g.logo.as_str());
-                        if theme::list_item(ui, &casino.name, selected, logo, trailing).clicked() {
+                        let age = casino.min_age.map(age_label);
+                        let badge = age.as_deref();
+                        if theme::list_item(ui, &casino.name, selected, logo, badge, trailing)
+                            .clicked()
+                        {
                             self.view = View::Casino(casino.id);
                         }
                     }

@@ -262,6 +262,11 @@ fn choice<T: Copy + PartialEq, S: Into<String>>(
     resp
 }
 
+/// "18+" / "21+"
+fn age_label(min_age: u8) -> String {
+    format!("{min_age}+")
+}
+
 fn status_label(received: bool) -> &'static str {
     if received {
         "Received"

@@ -154,6 +154,8 @@ pub struct FreeCoins {
 pub struct Casino {
     pub id: i64,
     pub name: String,
+    /// Minimum age to play (18 or 21), set by the user; None until chosen.
+    pub min_age: Option<u8>,
     pub purchases: Vec<Purchase>,
     pub redemptions: Vec<Redemption>,
     pub free_coins: Vec<FreeCoins>,
@@ -566,6 +568,7 @@ mod tests {
         let casino = Casino {
             id: 1,
             name: "Modo".into(),
+            min_age: None,
             purchases: vec![Purchase {
                 id: 1,
                 date: d,

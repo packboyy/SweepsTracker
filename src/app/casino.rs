@@ -14,6 +14,8 @@ impl App {
         // logo, name and tier then fill what's left, and a long name truncates instead of
         // running under the buttons.
         let header = Vec2::new(ui.available_width(), 44.0);
+        // Saved after the header is drawn (the casino is borrowed while it's drawn).
+        let mut min_age = casino.min_age;
         ui.allocate_ui_with_layout(header, Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(theme::SHADOW);
             if theme::colored_button(ui, "Delete", LOSS, false)
@@ -31,6 +33,16 @@ impl App {
             {
                 self.pasting = Some((id, String::new(), Vec::new()));
             }
+            let age_text = |age: Option<u8>| age.map_or("Age: ?".to_string(), age_label);
+            choice(
+                ui,
+                "min_age",
+                &mut min_age,
+                &[None, Some(18), Some(21)],
+                age_text,
+                84.0,
+            )
+            .on_hover_text("Minimum age to play here");
             if let Some(g) = info.filter(|g| !g.review_url.is_empty()) {
                 if theme::button(ui, "Review")
                     .on_hover_text("Open the full review on SweepsGrail")
@@ -43,8 +55,9 @@ impl App {
                 if let Some(g) = info {
                     theme::logo(ui, &g.logo, 40.0);
                 }
-                // Keep room for the tier badge and NEW tag after the name.
-                let reserve = if info.is_some() { 90.0 } else { 0.0 };
+                // Keep room for the age, tier badge and NEW tag after the name.
+                let reserve = if info.is_some() { 90.0 } else { 0.0 }
+                    + if casino.min_age.is_some() { 44.0 } else { 0.0 };
                 ui.scope(|ui| {
                     ui.set_max_width((ui.available_width() - reserve).max(60.0));
                     ui.add(
@@ -54,6 +67,9 @@ impl App {
                         .truncate(),
                     );
                 });
+                if let Some(age) = casino.min_age {
+                    theme::tag(ui, &age_label(age), PRIMARY);
+                }
                 if let Some(g) = info {
                     if !g.tier.is_empty() {
                         theme::tier_badge(ui, &g.tier, 26.0);
@@ -66,6 +82,13 @@ impl App {
         });
         theme::underline(ui);
         ui.add_space(10.0);
+        if min_age != casino.min_age {
+            let result = self.db().set_min_age(id, min_age);
+            self.apply(result);
+            // The rest of the page is drawn next frame, from the reloaded data.
+            ui.ctx().request_repaint();
+            return;
+        }
         if let Some(g) = info {
             grail_info(ui, g);
             ui.add_space(8.0);
