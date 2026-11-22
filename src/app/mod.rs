@@ -187,8 +187,7 @@ fn choice<T: Copy + PartialEq, S: Into<String>>(
         |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for &option in options {
-                let mark = if option == *value { "current" } else { "" };
-                if theme::menu_item(ui, &label(option), mark).clicked() {
+                if theme::menu_option(ui, &label(option), option == *value).clicked() {
                     *value = option;
                 }
             }

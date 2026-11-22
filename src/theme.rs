@@ -397,15 +397,16 @@ pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
     p.rect_filled(rect.translate(Vec2::splat(offset)), 0.0, PRIMARY);
     p.rect_filled(rect, 0.0, if resp.hovered() { STRIPE } else { BG });
     p.rect_stroke(rect.shrink(BORDER / 2.0), 0.0, Stroke::new(BORDER, PRIMARY));
-    let clip = Rect::from_min_max(rect.min, egui::pos2(rect.right() - 24.0, rect.bottom()));
+    // Text runs up to just before the arrow.
+    let clip = Rect::from_min_max(rect.min, egui::pos2(rect.right() - 18.0, rect.bottom()));
     p.with_clip_rect(clip).text(
-        rect.left_center() + Vec2::new(10.0, 0.0),
+        rect.left_center() + Vec2::new(8.0, 0.0),
         Align2::LEFT_CENTER,
         text,
-        FontId::new(15.0, bold()),
+        FontId::new(14.0, bold()),
         PRIMARY,
     );
-    let (cx, cy, h) = (rect.right() - 13.0, rect.center().y, 4.5);
+    let (cx, cy, h) = (rect.right() - 10.0, rect.center().y, 4.0);
     p.add(Shape::convex_polygon(
         vec![
             egui::pos2(cx - h, cy - h * 0.6),
@@ -415,6 +416,32 @@ pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
         PRIMARY,
         Stroke::NONE,
     ));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Option row in a dropdown: the current choice is tinted with a primary bar on its left
+/// (no text marker, so it fits narrow menus).
+pub fn menu_option(ui: &mut egui::Ui, label: &str, selected: bool) -> Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
+    let p = ui.painter();
+    if selected || resp.hovered() {
+        p.rect_filled(rect, 0.0, STRIPE);
+    }
+    if selected {
+        let bar = Rect::from_min_size(
+            rect.left_top() + Vec2::new(0.0, 6.0),
+            Vec2::new(PAD, rect.height() - 12.0),
+        );
+        p.rect_filled(bar, 0.0, PRIMARY);
+    }
+    p.text(
+        rect.left_center() + Vec2::new(12.0, 0.0),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::new(14.5, bold()),
+        PRIMARY,
+    );
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
