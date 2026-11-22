@@ -292,7 +292,9 @@ pub fn parse_cents(text: &str) -> Option<Cents> {
 
 pub fn parse_date(text: &str) -> Option<NaiveDate> {
     let text = text.trim();
-    ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"]
+    // Two-digit years first: %Y would read "3/18/26" as the year 26. (%y refuses "2026",
+    // so four-digit years still fall through to %Y.)
+    ["%m/%d/%y", "%m/%d/%Y", "%Y-%m-%d"]
         .iter()
         .find_map(|fmt| NaiveDate::parse_from_str(text, fmt).ok())
 }
@@ -311,8 +313,7 @@ pub struct ParsedRow {
 pub fn parse_spreadsheet(text: &str) -> Vec<ParsedRow> {
     text.lines()
         .filter_map(|line| {
-            let sep = if line.contains('\t') { '\t' } else { ',' };
-            let cols: Vec<&str> = line.split(sep).map(str::trim).collect();
+            let cols = split_row(line);
             let date = parse_date(cols.first()?)?;
             // Negative amounts aren't meaningful here; treat them like blanks so the
             // preview and the import agree.
@@ -331,6 +332,29 @@ pub fn parse_spreadsheet(text: &str) -> Vec<ParsedRow> {
             (row.spent != 0 || row.cc_received != 0 || row.withdrawal != 0).then_some(row)
         })
         .collect()
+}
+
+/// Splits one pasted line into trimmed cells: tab separated if it has a tab, otherwise CSV,
+/// where a quoted cell can hold commas ("1,000") and "" is a literal quote.
+fn split_row(line: &str) -> Vec<String> {
+    if line.contains('\t') {
+        return line.split('\t').map(|s| s.trim().to_string()).collect();
+    }
+    let mut cells = vec![String::new()];
+    let mut quoted = false;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+                cells.last_mut().unwrap().push('"');
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => cells.push(String::new()),
+            _ => cells.last_mut().unwrap().push(ch),
+        }
+    }
+    cells.iter().map(|s| s.trim().to_string()).collect()
 }
 
 /// "$1,234.50" / "-$90.00"
@@ -375,7 +399,9 @@ pub fn edit_text(cents: Cents) -> String {
 
 pub fn percent(v: f64) -> String {
     let s = format!("{:.1}", v * 100.0);
-    format!("{}%", s.trim_end_matches(".0"))
+    let s = s.trim_end_matches(".0");
+    // A tiny negative (e.g. a 0.01% markup) rounds to "-0".
+    format!("{}%", if s == "-0" { "0" } else { s })
 }
 
 // ---- Projects and settings ------------------------------------------------------------

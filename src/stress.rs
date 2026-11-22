@@ -847,3 +847,138 @@ fn scraper_survives_truncated_and_mangled_pages() {
     }
     assert!(crate::grail::parse(&html).len() > 50);
 }
+
+// ---- Round 3 ----
+
+/// Rows written the way Excel, Google Sheets and CSV exports write them (thousands
+/// separators, "$", quoted CSV cells, two- and four-digit years) parse back exactly.
+#[test]
+fn pasted_rows_round_trip_in_every_spreadsheet_format() {
+    let mut rng = Rng(0x7ab1e);
+    for _ in 0..2_000 {
+        let csv = rng.below(2) == 0;
+        let mut text = String::new();
+        let mut expected = Vec::new();
+        for _ in 0..rng.below(20) + 1 {
+            let date = NaiveDate::from_ymd_opt(
+                2000 + rng.below(69) as i32,
+                1 + rng.below(12) as u32,
+                1 + rng.below(28) as u32,
+            )
+            .unwrap();
+            let date_text = match rng.below(3) {
+                0 => date.format("%-m/%-d/%y").to_string(),
+                1 => date.format("%-m/%-d/%Y").to_string(),
+                _ => date.format("%Y-%m-%d").to_string(),
+            };
+            let amounts: Vec<i64> = (0..3)
+                .map(|_| match rng.below(3) {
+                    0 => 0,
+                    _ => rng.below(100_000_000) as i64 + 1,
+                })
+                .collect();
+            if amounts.iter().all(|a| *a == 0) {
+                continue;
+            }
+            let cells: Vec<String> = amounts
+                .iter()
+                .map(|&a| {
+                    if a == 0 {
+                        return String::new();
+                    }
+                    let s = format_amount(a, &mut rng);
+                    // CSV writers quote any cell holding a comma (and some quote everything).
+                    if csv && (s.contains(',') || rng.below(4) == 0) {
+                        format!("\"{s}\"")
+                    } else {
+                        s
+                    }
+                })
+                .collect();
+            let sep = if csv { "," } else { "\t" };
+            text.push_str(&format!("{date_text}{sep}{}\n", cells.join(sep)));
+            expected.push(ParsedRow {
+                date,
+                spent: amounts[0],
+                cc_received: amounts[1],
+                withdrawal: amounts[2],
+            });
+        }
+        assert_eq!(parse_spreadsheet(&text), expected, "{text}");
+    }
+}
+
+#[test]
+fn two_digit_years_are_this_century() {
+    let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day);
+    assert_eq!(parse_date("3/18/26"), d(2026, 3, 18));
+    assert_eq!(parse_date("12/31/99"), d(1999, 12, 31));
+    assert_eq!(parse_date("3/18/2026"), d(2026, 3, 18));
+    assert_eq!(parse_date("2026-03-18"), d(2026, 3, 18));
+    assert_eq!(parse_date("1/1/0001"), d(1, 1, 1));
+    // An imported "26" row is a 2026 tax year, not year 26.
+    let rows = parse_spreadsheet("3/18/26\t10\t10\t");
+    let data = Data {
+        casinos: vec![Casino {
+            id: 1,
+            name: "A".into(),
+            purchases: vec![Purchase {
+                id: 1,
+                date: rows[0].date,
+                spent: rows[0].spent,
+                cc_received: rows[0].cc_received,
+                note: String::new(),
+            }],
+            redemptions: vec![],
+            free_coins: vec![],
+        }],
+    };
+    assert_eq!(tax::years(&data, 2026), vec![2026]);
+}
+
+#[test]
+fn csv_quotes_hold_commas_and_escaped_quotes() {
+    let rows = parse_spreadsheet("3/13/2026,\"$1,234.50\",\"1,500\",\"2,000\"\n");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].spent, rows[0].cc_received, rows[0].withdrawal),
+        (123450, 150000, 200000)
+    );
+    // A doubled quote inside a quoted cell is a literal quote, not the end of the cell.
+    let rows = parse_spreadsheet("\"3/13/2026\",\"90\",\"100\",\"\"\"\"");
+    assert_eq!((rows[0].spent, rows[0].cc_received, rows[0].withdrawal), (9000, 10000, 0));
+}
+
+/// An old project whose casino names differ only by case used to fail to open at all.
+#[test]
+fn legacy_names_differing_by_case_are_kept_apart() {
+    let dir = temp_dir("legacy-case");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(LEGACY_PROJECT_FILE),
+        r#"{"casinos":[
+            {"name":"Modo","entries":[{"date":"2026-01-01","spent":10,"cc_received":10,"withdrawal":0}]},
+            {"name":"modo","entries":[{"date":"2026-01-02","spent":20,"cc_received":20,"withdrawal":0}]},
+            {"name":"MODO","entries":[]},
+            {"name":"modo (2)","entries":[]}
+        ]}"#,
+    )
+    .unwrap();
+    let s = Store::open(&dir).expect("old project opens");
+    let data = s.load().unwrap();
+    let mut names: Vec<&str> = data.casinos.iter().map(|c| c.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["MODO (3)", "Modo", "modo (2)", "modo (2) (2)"]);
+    assert_eq!(data.stats().spent, 3000, "no entries lost");
+    drop(s);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_tiny_markup_is_not_minus_zero_percent() {
+    assert_eq!(percent(-0.0001), "0%");
+    assert_eq!(percent(-0.0004), "0%");
+    assert_eq!(percent(-0.001), "-0.1%");
+    assert_eq!(percent(0.0), "0%");
+    assert_eq!(percent(1.0), "100%");
+}

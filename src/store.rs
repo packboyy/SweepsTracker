@@ -699,7 +699,24 @@ impl Store {
             .map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
         let tx = self.conn.transaction().map_err(err)?;
         for c in &legacy.casinos {
-            tx.execute("INSERT INTO casinos (name) VALUES (?1)", [&c.name])
+            // The old file could hold names that differ only by case, which the database
+            // refuses; keep them as separate casinos ("Modo", "modo (2)") rather than fail
+            // and leave the project impossible to open.
+            let mut name = c.name.clone();
+            for n in 2.. {
+                let taken: bool = tx
+                    .query_row(
+                        "SELECT EXISTS (SELECT 1 FROM casinos WHERE name = ?1 COLLATE NOCASE)",
+                        [&name],
+                        |r| r.get(0),
+                    )
+                    .map_err(err)?;
+                if !taken {
+                    break;
+                }
+                name = format!("{} ({n})", c.name);
+            }
+            tx.execute("INSERT INTO casinos (name) VALUES (?1)", [&name])
                 .map_err(err)?;
             let casino_id = tx.last_insert_rowid();
             for e in &c.entries {
