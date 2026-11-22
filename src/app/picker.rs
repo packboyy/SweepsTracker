@@ -57,8 +57,9 @@ impl App {
                     if std::mem::take(&mut picker.focus) {
                         r.request_focus();
                     }
-                    if submitted(ui, &r) {
-                        // Enter adds the first match that isn't added yet, else the typed name.
+                    // Enter adds the first match that isn't added yet, else the typed name.
+                    // Nothing typed: do nothing (it used to add the top casino by accident).
+                    if submitted(ui, &r) && !typed.is_empty() {
                         add = matches
                             .iter()
                             .find(|g| added_id(&g.slug).is_none())

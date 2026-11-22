@@ -9,7 +9,7 @@
 
 use crate::model::{
     legacy_cents, Casino, Cents, Data, FreeCoins, LegacyData, Method, ParsedRow, Purchase,
-    Redemption, Source, LEGACY_PROJECT_FILE,
+    Redemption, Source, LEGACY_PROJECT_FILE, MAX_CENTS,
 };
 use chrono::NaiveDate;
 use rusqlite::{params, Connection, ErrorCode};
@@ -21,7 +21,7 @@ const BACKUP_DIR: &str = "backups";
 const BACKUPS_KEPT: usize = 30;
 
 /// Schema migrations, in order. `user_version` = number of migrations applied.
-const MIGRATIONS: &[&str] = &[
+pub(crate) const MIGRATIONS: &[&str] = &[
     // 1: casinos, purchases, redemptions
     "
     CREATE TABLE casinos (
@@ -258,7 +258,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    fn in_memory() -> Store {
+    pub(crate) fn in_memory() -> Store {
         let mut store = Store {
             conn: Connection::open_in_memory().unwrap(),
         };
@@ -498,6 +498,7 @@ impl Store {
         cc_received: Cents,
         note: &str,
     ) -> Result<i64, String> {
+        check_amounts(&[spent, cc_received])?;
         self.conn
             .execute(
                 "INSERT INTO purchases (casino_id, date, spent_cents, cc_received_cents, note)
@@ -516,6 +517,7 @@ impl Store {
         cc_received: Cents,
         note: &str,
     ) -> Result<(), String> {
+        check_amounts(&[spent, cc_received])?;
         self.conn
             .execute(
                 &format!(
@@ -578,6 +580,7 @@ impl Store {
         source: Source,
         note: &str,
     ) -> Result<i64, String> {
+        check_amounts(&[sc])?;
         self.conn
             .execute(
                 "INSERT INTO free_coins (casino_id, date, sc_cents, source, note)
@@ -596,6 +599,7 @@ impl Store {
         source: Source,
         note: &str,
     ) -> Result<(), String> {
+        check_amounts(&[sc])?;
         self.conn
             .execute(
                 &format!(
@@ -703,9 +707,9 @@ impl Store {
                     &tx,
                     casino_id,
                     e.date,
-                    legacy_cents(e.spent),
-                    legacy_cents(e.cc_received),
-                    legacy_cents(e.withdrawal),
+                    legacy_cents(e.spent)?,
+                    legacy_cents(e.cc_received)?,
+                    legacy_cents(e.withdrawal)?,
                     &e.note,
                 )?;
             }
@@ -736,7 +740,16 @@ impl Store {
 }
 
 /// Rules the table's CHECKs can't express (the fee column came later, in migration 2).
+/// Amounts above `MAX_CENTS` are refused so totals can't overflow.
+fn check_amounts(amounts: &[Cents]) -> Result<(), String> {
+    if amounts.iter().any(|a| *a > MAX_CENTS) {
+        return Err("Amounts over $1,000,000,000 aren't supported.".into());
+    }
+    Ok(())
+}
+
 fn check_redemption(r: &RedemptionInput) -> Result<(), String> {
+    check_amounts(&[r.amount, r.fee])?;
     if r.fee > r.amount {
         return Err("The fee can't be more than the withdrawal amount.".into());
     }
@@ -764,6 +777,7 @@ fn insert_parts(
     withdrawal: Cents,
     note: &str,
 ) -> Result<(), String> {
+    check_amounts(&[spent, cc_received, withdrawal])?;
     if spent > 0 || cc_received > 0 {
         conn.execute(
             "INSERT INTO purchases (casino_id, date, spent_cents, cc_received_cents, note)

@@ -20,7 +20,8 @@ fn main() -> eframe::Result {
             egui::ViewportBuilder::default()
                 .with_title("Sweeps Tracker")
                 .with_inner_size([1150.0, 720.0])
-                .with_min_inner_size([820.0, 520.0]),
+                // Wide enough for the sidebar (up to 300) plus the entries table's columns.
+                .with_min_inner_size([1060.0, 620.0]),
         ),
         ..Default::default()
     };

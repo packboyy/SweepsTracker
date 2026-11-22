@@ -836,6 +836,7 @@ impl eframe::App for App {
         egui::SidePanel::left("sidebar")
             .resizable(true)
             .default_width(240.0)
+            .width_range(200.0..=300.0)
             .frame(
                 egui::Frame::side_top_panel(&ctx.style())
                     .inner_margin(egui::Margin::symmetric(12.0, 8.0)),

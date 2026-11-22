@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 /// Hundredths of a dollar (or of a coin, for CC amounts).
 pub type Cents = i64;
 
+/// Largest amount accepted for one entry ($1,000,000,000). Far above anything real, and low
+/// enough that totals of millions of entries can't overflow.
+pub const MAX_CENTS: Cents = 100_000_000_000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Purchase {
     pub id: i64,
@@ -280,6 +284,9 @@ pub fn parse_cents(text: &str) -> Option<Cents> {
     let cents = whole
         .checked_mul(100)?
         .checked_add(tenths * 10 + hundredths + round_up)?;
+    if cents > MAX_CENTS {
+        return None;
+    }
     Some(if negative { -cents } else { cents })
 }
 
@@ -451,8 +458,14 @@ pub struct LegacyEntry {
 }
 
 /// Float dollars from the old format -> cents.
-pub fn legacy_cents(v: f64) -> Cents {
-    (v * 100.0).round() as Cents
+pub fn legacy_cents(v: f64) -> Result<Cents, String> {
+    let cents = (v * 100.0).round();
+    if !cents.is_finite() || cents.abs() > MAX_CENTS as f64 {
+        return Err(format!(
+            "An amount in the old project file is out of range: {v}"
+        ));
+    }
+    Ok(cents as Cents)
 }
 
 /// Before projects existed, data lived in the app folder as data.json. On first run of the

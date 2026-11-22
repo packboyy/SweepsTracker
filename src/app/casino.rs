@@ -320,14 +320,16 @@ impl App {
                 .resizable(true)
                 .max_scroll_height(max_height)
                 .cell_layout(Layout::left_to_right(Align::Center))
-                .column(Column::exact(90.0))
+                // Fixed columns + minimums add up to ~680, which fits beside the widest
+                // sidebar at the smallest window size.
                 .column(Column::exact(85.0))
+                .column(Column::exact(80.0))
+                .column(Column::exact(90.0))
+                .column(Column::exact(70.0))
                 .column(Column::exact(95.0))
-                .column(Column::exact(75.0))
+                .column(Column::remainder().at_least(100.0).clip(true))
+                .column(Column::initial(110.0).at_least(50.0).clip(true))
                 .column(Column::exact(100.0))
-                .column(Column::remainder().at_least(140.0).clip(true))
-                .column(Column::initial(120.0).at_least(60.0).clip(true))
-                .column(Column::exact(110.0))
                 .header(26.0, |mut header| {
                     for h in [
                         "DATE",
