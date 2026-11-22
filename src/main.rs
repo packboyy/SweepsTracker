@@ -21,7 +21,12 @@ fn main() -> eframe::Result {
                 .with_title("Sweeps Tracker")
                 .with_inner_size([1150.0, 720.0])
                 // Wide enough for the sidebar (up to 300) plus the entries table's columns.
-                .with_min_inner_size([1060.0, 620.0]),
+                .with_min_inner_size([1060.0, 620.0])
+                // Window / Dock / taskbar icon (the .app bundle also carries AppIcon.icns).
+                .with_icon(
+                    eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+                        .expect("valid icon PNG"),
+                ),
         ),
         ..Default::default()
     };

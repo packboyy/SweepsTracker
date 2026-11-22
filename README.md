@@ -34,6 +34,13 @@ cargo run --release
 ```
 The built app is at `target/release/sweeps-tracker` (`sweeps-tracker.exe` on Windows). You can copy it anywhere and double-click it.
 
+## Mac app
+```sh
+scripts/bundle-mac.sh            # builds "dist/Sweeps Tracker.app" with the app icon
+scripts/bundle-mac.sh --install  # ...and copies it to /Applications
+```
+The icon is `assets/icon.png`, made from the artwork in `assets/icon-source.png` with `swift scripts/make-icon.swift assets/icon-source.png assets/icon.png` (fits it into the macOS rounded-square shape).
+
 ## Test
 ```sh
 cargo test
