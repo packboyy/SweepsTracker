@@ -222,7 +222,7 @@ impl App {
                 ui.label(dim("You can restore it from Recently deleted in the sidebar.").small());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    delete = theme::button(ui, RichText::new("Delete").color(LOSS)).clicked();
+                    delete = theme::colored_button(ui, "Delete", LOSS, true).clicked();
                     close = theme::button(ui, "Cancel").clicked()
                         || ui.input(|i| i.key_pressed(Key::Escape));
                 });

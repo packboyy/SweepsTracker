@@ -522,14 +522,14 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Floating message card at the bottom center: errors (red, stay until closed) or
-    /// success notices (green, fade after a few seconds unless hovered), with Undo after a
+    /// Floating message card at the bottom center: errors (all red, stay until closed) or
+    /// notices (all periwinkle, fade after a few seconds unless hovered), with Undo after a
     /// delete.
     fn toast(&mut self, ctx: &egui::Context) {
         const NOTICE_SECONDS: f64 = 8.0;
         let (text, color, is_error) = match (&self.status, &self.notice) {
             (Some(e), _) => (e.clone(), LOSS, true),
-            (None, Some(n)) => (n.clone(), GAIN, false),
+            (None, Some(n)) => (n.clone(), PRIMARY, false),
             _ => {
                 self.toast_shown = None;
                 return;
@@ -569,10 +569,11 @@ impl App {
                             ui.spacing_mut().item_spacing.x = 12.0;
                             ui.label(RichText::new(&text).family(theme::bold()).color(color));
                             if !is_error && self.undo.is_some() {
-                                undo_clicked = theme::button(ui, "Undo").clicked();
+                                undo_clicked =
+                                    theme::colored_button(ui, "Undo", color, true).clicked();
                             }
                             let size = ui.spacing().interact_size.y;
-                            close = theme::x_button(ui, color, size)
+                            close = theme::x_button(ui, color, color, size)
                                 .on_hover_text("Dismiss")
                                 .clicked();
                         });
@@ -696,12 +697,22 @@ fn ago(unix_secs: i64) -> String {
     }
 }
 
+/// Centered dialog card. egui's own title bar (big, centered, tinted) is replaced by a
+/// left-aligned heading with the same underline bar as the page headers.
 fn dialog(ctx: &egui::Context, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Window::new(title)
+        .title_bar(false)
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-        .show(ctx, add_contents);
+        .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(16.0)))
+        .show(ctx, |ui| {
+            ui.label(RichText::new(title).size(20.0).family(theme::bold()));
+            ui.add_space(2.0);
+            theme::underline_width(ui, 340.0);
+            ui.add_space(10.0);
+            add_contents(ui);
+        });
 }
 
 impl eframe::App for App {

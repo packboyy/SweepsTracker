@@ -134,6 +134,15 @@ pub fn install(ctx: &egui::Context) {
 /// Draws a widget with a hard shadow behind it. The shadow shrinks on hover/press so
 /// buttons feel like they push in.
 pub fn shadowed(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> Response) -> Response {
+    shadowed_in(ui, PRIMARY, add)
+}
+
+/// `shadowed` with the shadow in `color` (e.g. red for a destructive button).
+pub fn shadowed_in(
+    ui: &mut egui::Ui,
+    color: Color32,
+    add: impl FnOnce(&mut egui::Ui) -> Response,
+) -> Response {
     let slot = ui.painter().add(Shape::Noop);
     let resp = add(ui);
     let offset = if resp.is_pointer_button_down_on() {
@@ -145,9 +154,20 @@ pub fn shadowed(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> Response) 
     };
     ui.painter().set(
         slot,
-        Shape::rect_filled(resp.rect.translate(Vec2::splat(offset)), 0.0, PRIMARY),
+        Shape::rect_filled(resp.rect.translate(Vec2::splat(offset)), 0.0, color),
     );
     resp
+}
+
+/// Button whose border, shadow and text all use `color`; `filled` makes it solid `color`
+/// with white text. Used for destructive (red) and call-to-action buttons so the button
+/// is one color instead of colored text in a periwinkle box.
+pub fn colored_button(ui: &mut egui::Ui, text: &str, color: Color32, filled: bool) -> Response {
+    let (fill, text_color) = if filled { (color, BG) } else { (BG, color) };
+    let button = egui::Button::new(egui::RichText::new(text).color(text_color))
+        .fill(fill)
+        .stroke(Stroke::new(BORDER, color));
+    shadowed_in(ui, color, |ui| ui.add(button)).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 pub fn button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> Response {
@@ -207,6 +227,13 @@ fn underline_bar(ui: &egui::Ui, rect: Rect, segment_x: f32, segment_w: f32) {
         Vec2::new(segment_w, rect.height()),
     );
     p.rect_filled(seg, 0.0, PRIMARY);
+}
+
+/// Underline of a fixed width (for auto-sized windows, where "full width" would stretch
+/// the window).
+pub fn underline_width(ui: &mut egui::Ui, width: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, PAD), Sense::hover());
+    underline_bar(ui, rect, 0.0, rect.width() / 3.0);
 }
 
 /// Full-width underline under a page title.
@@ -428,8 +455,8 @@ pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
 }
 
 /// Square button with an X drawn as two lines (the ✕ character isn't in the font and
-/// renders as an empty box). Hard shadow like the other buttons.
-pub fn x_button(ui: &mut egui::Ui, color: Color32, size: f32) -> Response {
+/// renders as an empty box). `color` is the X; `frame` the border and hard shadow.
+pub fn x_button(ui: &mut egui::Ui, color: Color32, frame: Color32, size: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let offset = if resp.is_pointer_button_down_on() {
         1.0
@@ -439,9 +466,9 @@ pub fn x_button(ui: &mut egui::Ui, color: Color32, size: f32) -> Response {
         3.0
     };
     let p = ui.painter();
-    p.rect_filled(rect.translate(Vec2::splat(offset)), 0.0, PRIMARY);
+    p.rect_filled(rect.translate(Vec2::splat(offset)), 0.0, frame);
     p.rect_filled(rect, 0.0, if resp.hovered() { STRIPE } else { BG });
-    p.rect_stroke(rect.shrink(BORDER / 2.0), 0.0, Stroke::new(BORDER, PRIMARY));
+    p.rect_stroke(rect.shrink(BORDER / 2.0), 0.0, Stroke::new(BORDER, frame));
     let c = rect.center();
     let r = size * 0.18;
     let stroke = Stroke::new(2.0_f32, color);

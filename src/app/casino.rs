@@ -16,7 +16,7 @@ impl App {
         let header = Vec2::new(ui.available_width(), 44.0);
         ui.allocate_ui_with_layout(header, Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(theme::SHADOW);
-            if theme::button(ui, RichText::new("Delete").color(LOSS))
+            if theme::colored_button(ui, "Delete", LOSS, false)
                 .on_hover_text("Delete this casino and all its entries")
                 .clicked()
             {
@@ -417,7 +417,7 @@ impl App {
                                     edit = Some(r.edit_state());
                                 }
                                 let size = ui.spacing().interact_size.y;
-                                if theme::x_button(ui, LOSS, size)
+                                if theme::x_button(ui, LOSS, PRIMARY, size)
                                     .on_hover_text("Delete (you can restore it from Recently deleted)")
                                     .clicked()
                                 {
