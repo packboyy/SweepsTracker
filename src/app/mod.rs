@@ -133,8 +133,10 @@ pub struct App {
     /// Soft-deleted casinos and entries, for "Recently deleted" (reloaded with `data`).
     deleted: Deleted,
     cache: Cache,
-    /// The last delete, offered as Undo in the notice bar.
+    /// The last delete, offered as Undo in the toast.
     undo: Option<Undo>,
+    /// Message the toast is showing and when it first appeared (for auto-dismiss).
+    toast_shown: Option<(String, f64)>,
     /// Year shown on the Taxes page.
     tax_year: i32,
     /// Open project folder (holds sweeps.db and backups/). None shows the welcome screen.
@@ -405,6 +407,7 @@ impl App {
             deleted: Deleted::default(),
             cache: Cache::default(),
             undo: None,
+            toast_shown: None,
             project: None,
             store: None,
             config,
@@ -519,7 +522,90 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Records a successful delete so the notice bar can offer Undo.
+    /// Floating message card at the bottom center: errors (red, stay until closed) or
+    /// success notices (green, fade after a few seconds unless hovered), with Undo after a
+    /// delete.
+    fn toast(&mut self, ctx: &egui::Context) {
+        const NOTICE_SECONDS: f64 = 8.0;
+        let (text, color, is_error) = match (&self.status, &self.notice) {
+            (Some(e), _) => (e.clone(), LOSS, true),
+            (None, Some(n)) => (n.clone(), GAIN, false),
+            _ => {
+                self.toast_shown = None;
+                return;
+            }
+        };
+        let now = ctx.input(|i| i.time);
+        // Restart the timer whenever a new message appears.
+        if self.toast_shown.as_ref().map(|(t, _)| t) != Some(&text) {
+            self.toast_shown = Some((text.clone(), now));
+        }
+        let shown_at = self.toast_shown.as_ref().map_or(now, |(_, at)| *at);
+        if !is_error && now - shown_at > NOTICE_SECONDS {
+            self.notice = None;
+            self.undo = None;
+            self.toast_shown = None;
+            return;
+        }
+
+        let mut undo_clicked = false;
+        let mut close = false;
+        let area = egui::Area::new(egui::Id::new("toast"))
+            .order(egui::Order::Foreground)
+            .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -24.0))
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(theme::BG)
+                    .stroke(Stroke::new(theme::BORDER, color))
+                    .shadow(egui::Shadow {
+                        offset: Vec2::splat(theme::SHADOW),
+                        blur: 0.0,
+                        spread: 0.0,
+                        color,
+                    })
+                    .inner_margin(egui::Margin::symmetric(14.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 12.0;
+                            ui.label(RichText::new(&text).family(theme::bold()).color(color));
+                            if !is_error && self.undo.is_some() {
+                                undo_clicked = theme::button(ui, "Undo").clicked();
+                            }
+                            let size = ui.spacing().interact_size.y;
+                            close = theme::x_button(ui, color, size)
+                                .on_hover_text("Dismiss")
+                                .clicked();
+                        });
+                    });
+            });
+        if area.response.hovered() {
+            // Keep it up while the pointer is on it.
+            self.toast_shown = Some((text, now));
+        }
+        if !is_error {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        if close {
+            self.status = None;
+            self.notice = None;
+            self.undo = None;
+        }
+        // Only consume the undo when it's actually clicked; otherwise keep offering it.
+        if let Some(undo) = undo_clicked.then(|| self.undo.take()).flatten() {
+            let result = match undo {
+                Undo::Casino(id) => self.db().restore_casino(id),
+                Undo::Entry(entry) => self.db().restore_entry(entry),
+            };
+            if self.apply(result).is_some() {
+                self.notice = Some("Restored.".into());
+                if let Undo::Casino(id) = undo {
+                    self.view = View::Casino(id);
+                }
+            }
+        }
+    }
+
+    /// Records a successful delete so the toast can offer Undo.
     fn deleted_notice(&mut self, undo: Undo, what: String) {
         self.status = None;
         self.notice = Some(format!("Deleted {what}."));
@@ -642,41 +728,7 @@ impl eframe::App for App {
             self.action = Some(ProjectAction::Open);
         }
 
-        // Bottom bar: errors in red, otherwise success notices in green.
-        let message = match (&self.status, &self.notice) {
-            (Some(e), _) => Some((e.clone(), LOSS)),
-            (None, Some(n)) => Some((n.clone(), GAIN)),
-            _ => None,
-        };
-        if let Some((text, color)) = message {
-            let mut undo_clicked = false;
-            egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(text).color(color));
-                    if self.status.is_none() && self.undo.is_some() {
-                        undo_clicked = theme::button(ui, "Undo").clicked();
-                    }
-                    if theme::button(ui, "✕").clicked() {
-                        self.status = None;
-                        self.notice = None;
-                        self.undo = None;
-                    }
-                });
-            });
-            // Only consume the undo when it's actually clicked; otherwise keep offering it.
-            if let Some(undo) = undo_clicked.then(|| self.undo.take()).flatten() {
-                let result = match undo {
-                    Undo::Casino(id) => self.db().restore_casino(id),
-                    Undo::Entry(entry) => self.db().restore_entry(entry),
-                };
-                if self.apply(result).is_some() {
-                    self.notice = Some("Restored.".into());
-                    if let Undo::Casino(id) = undo {
-                        self.view = View::Casino(id);
-                    }
-                }
-            }
-        }
+        self.toast(ctx);
 
         if self.project.is_none() {
             egui::CentralPanel::default()

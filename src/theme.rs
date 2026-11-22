@@ -427,6 +427,29 @@ pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Square button with an X drawn as two lines (the ✕ character isn't in the font and
+/// renders as an empty box). Hard shadow like the other buttons.
+pub fn x_button(ui: &mut egui::Ui, color: Color32, size: f32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let offset = if resp.is_pointer_button_down_on() {
+        1.0
+    } else if resp.hovered() {
+        2.0
+    } else {
+        3.0
+    };
+    let p = ui.painter();
+    p.rect_filled(rect.translate(Vec2::splat(offset)), 0.0, PRIMARY);
+    p.rect_filled(rect, 0.0, if resp.hovered() { STRIPE } else { BG });
+    p.rect_stroke(rect.shrink(BORDER / 2.0), 0.0, Stroke::new(BORDER, PRIMARY));
+    let c = rect.center();
+    let r = size * 0.18;
+    let stroke = Stroke::new(2.0_f32, color);
+    p.line_segment([c + Vec2::new(-r, -r), c + Vec2::new(r, r)], stroke);
+    p.line_segment([c + Vec2::new(-r, r), c + Vec2::new(r, -r)], stroke);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// Option row in a dropdown: the current choice is filled primary with white text (like
 /// the selected sidebar row); others get a clear tint on hover.
 pub fn menu_option(ui: &mut egui::Ui, label: &str, selected: bool) -> Response {

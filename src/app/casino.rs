@@ -416,7 +416,8 @@ impl App {
                                 if theme::button(ui, "Edit").clicked() {
                                     edit = Some(r.edit_state());
                                 }
-                                if theme::button(ui, RichText::new("✕").color(LOSS))
+                                let size = ui.spacing().interact_size.y;
+                                if theme::x_button(ui, LOSS, size)
                                     .on_hover_text("Delete (you can restore it from Recently deleted)")
                                     .clicked()
                                 {
