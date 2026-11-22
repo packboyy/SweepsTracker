@@ -5,7 +5,7 @@ use super::*;
 impl App {
     pub(super) fn overview(&mut self, ui: &mut egui::Ui) {
         page_header(ui, "Overview", |_| {});
-        stats_row(ui, self.data.stats());
+        stats_row(ui, self.cache.totals);
         ui.add_space(16.0);
 
         egui::ScrollArea::vertical()
@@ -13,7 +13,7 @@ impl App {
             .show(ui, |ui| {
                 theme::section(ui, "Profit over time");
                 ui.add_space(4.0);
-                profit_chart(ui, self.data.daily_net());
+                profit_chart(ui, &self.cache.daily_net);
                 ui.add_space(20.0);
 
                 theme::section(ui, "By casino");
@@ -22,7 +22,7 @@ impl App {
                     .data
                     .casinos
                     .iter()
-                    .map(|c| (c.id, c.name.as_str(), c.stats(), c.entry_count()))
+                    .map(|c| (c.id, c.name.as_str(), self.stats_of(c.id), c.entry_count()))
                     .collect();
                 rows.sort_by(|a, b| b.2.net().cmp(&a.2.net()));
 
@@ -107,7 +107,7 @@ impl App {
 }
 
 /// Line chart of cumulative net profit (redeemed - spent) by day. Values are cents.
-fn profit_chart(ui: &mut egui::Ui, by_day: BTreeMap<NaiveDate, Cents>) {
+fn profit_chart(ui: &mut egui::Ui, by_day: &BTreeMap<NaiveDate, Cents>) {
     let (resp, painter) = ui.allocate_painter(
         Vec2::new(ui.available_width() - theme::SHADOW, 200.0),
         Sense::hover(),
@@ -134,8 +134,8 @@ fn profit_chart(ui: &mut egui::Ui, by_day: BTreeMap<NaiveDate, Cents>) {
 
     let mut total: Cents = 0;
     let points: Vec<(NaiveDate, Cents)> = by_day
-        .into_iter()
-        .map(|(d, v)| {
+        .iter()
+        .map(|(&d, &v)| {
             total += v;
             (d, total)
         })

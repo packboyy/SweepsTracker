@@ -6,7 +6,8 @@ description = "Track sweepstakes casino spending, coin discounts and withdrawals
 
 [dependencies]
 eframe = "0.29"
-egui_extras = { version = "0.29", features = ["datepicker", "http", "image"] }
+# Images are decoded by egui_extras; downloading (with a disk cache) is src/logos.rs.
+egui_extras = { version = "0.29", features = ["datepicker", "image"] }
 # Decoders for casino logos (SweepsGrail serves webp, jpg and png).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # Fetching and parsing the SweepsGrail casino list.

@@ -20,7 +20,7 @@ use eframe::egui::{
     self, Align, Align2, Color32, FontId, Key, Layout, RichText, Sense, Stroke, Vec2,
 };
 use egui_extras::{Column, DatePickerButton, TableBuilder};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -95,11 +95,46 @@ enum ProjectAction {
     Close,
 }
 
+/// Numbers the screens show every frame, computed once whenever the data or the
+/// SweepsGrail list changes (instead of ~60 times a second).
+#[derive(Default)]
+struct Cache {
+    totals: Stats,
+    casino: HashMap<i64, Stats>,
+    daily_net: BTreeMap<NaiveDate, Cents>,
+    /// Casino id -> index into the SweepsGrail list, for casinos that match one.
+    grail: HashMap<i64, usize>,
+    /// Years with activity, newest first (for the Taxes page).
+    years: Vec<i32>,
+    /// The Taxes page's summary, for the year it was computed for.
+    tax: Option<crate::tax::TaxSummary>,
+}
+
+impl Cache {
+    /// The SweepsGrail listing matching this casino, if any. Takes the list separately so
+    /// callers only borrow `cache` and `grail`, not the whole app.
+    fn listing<'a>(&self, grail: &'a GrailDb, casino_id: i64) -> Option<&'a GrailCasino> {
+        self.grail
+            .get(&casino_id)
+            .and_then(|&i| grail.casinos.get(i))
+    }
+}
+
+/// What the Undo button in the notice bar puts back.
+#[derive(Clone, Copy)]
+enum Undo {
+    Casino(i64),
+    Entry(EntryRef),
+}
+
 pub struct App {
     /// In-memory copy of the open project, reloaded from `store` after every change.
     data: Data,
     /// Soft-deleted casinos and entries, for "Recently deleted" (reloaded with `data`).
     deleted: Deleted,
+    cache: Cache,
+    /// The last delete, offered as Undo in the notice bar.
+    undo: Option<Undo>,
     /// Year shown on the Taxes page.
     tax_year: i32,
     /// Open project folder (holds sweeps.db and backups/). None shows the welcome screen.
@@ -368,6 +403,8 @@ impl App {
         let mut app = App {
             data: Data::default(),
             deleted: Deleted::default(),
+            cache: Cache::default(),
+            undo: None,
             project: None,
             store: None,
             config,
@@ -422,6 +459,7 @@ impl App {
             Ok((data, deleted)) => {
                 self.data = data;
                 self.deleted = deleted;
+                self.rebuild_cache();
             }
             Err(e) => self.status = Some(format!("Couldn't load the project: {e}")),
         }
@@ -444,11 +482,48 @@ impl App {
     /// Clears per-project UI state when switching projects.
     fn reset_view(&mut self) {
         self.view = View::Overview;
+        self.undo = None;
         self.picker.open = false;
         self.editing = None;
         self.pasting = None;
         self.renaming = None;
         self.confirm_delete = None;
+    }
+
+    fn rebuild_cache(&mut self) {
+        self.cache = Cache {
+            totals: self.data.stats(),
+            casino: self
+                .data
+                .casinos
+                .iter()
+                .map(|c| (c.id, c.stats()))
+                .collect(),
+            daily_net: self.data.daily_net(),
+            grail: self
+                .data
+                .casinos
+                .iter()
+                .filter_map(|c| self.grail.find_index(&c.name).map(|i| (c.id, i)))
+                .collect(),
+            years: crate::tax::years(&self.data, today().year()),
+            tax: None,
+        };
+    }
+
+    fn stats_of(&self, casino_id: i64) -> Stats {
+        self.cache
+            .casino
+            .get(&casino_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Records a successful delete so the notice bar can offer Undo.
+    fn deleted_notice(&mut self, undo: Undo, what: String) {
+        self.status = None;
+        self.notice = Some(format!("Deleted {what}."));
+        self.undo = Some(undo);
     }
 
     fn start_grail_fetch(&mut self, ctx: &egui::Context) {
@@ -469,6 +544,7 @@ impl App {
             Some(Ok(db)) => {
                 self.grail = db;
                 self.grail_rx = None;
+                self.rebuild_cache();
             }
             Some(Err(e)) => {
                 self.grail_error = Some(e);
@@ -573,15 +649,33 @@ impl eframe::App for App {
             _ => None,
         };
         if let Some((text, color)) = message {
+            let mut undo_clicked = false;
             egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(text).color(color));
+                    if self.status.is_none() && self.undo.is_some() {
+                        undo_clicked = theme::button(ui, "Undo").clicked();
+                    }
                     if theme::button(ui, "✕").clicked() {
                         self.status = None;
                         self.notice = None;
+                        self.undo = None;
                     }
                 });
             });
+            // Only consume the undo when it's actually clicked; otherwise keep offering it.
+            if let Some(undo) = undo_clicked.then(|| self.undo.take()).flatten() {
+                let result = match undo {
+                    Undo::Casino(id) => self.db().restore_casino(id),
+                    Undo::Entry(entry) => self.db().restore_entry(entry),
+                };
+                if self.apply(result).is_some() {
+                    self.notice = Some("Restored.".into());
+                    if let Undo::Casino(id) = undo {
+                        self.view = View::Casino(id);
+                    }
+                }
+            }
         }
 
         if self.project.is_none() {

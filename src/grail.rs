@@ -102,11 +102,16 @@ impl GrailDb {
     }
 
     pub fn find(&self, name: &str) -> Option<&GrailCasino> {
+        self.find_index(name).map(|i| &self.casinos[i])
+    }
+
+    /// Position in `casinos` of the listing matching `name` (loosely, plus aliases).
+    pub fn find_index(&self, name: &str) -> Option<usize> {
         let mut key = normalize(name);
         if let Some((_, full)) = ALIASES.iter().find(|(short, _)| *short == key) {
             key = full.to_string();
         }
-        self.casinos.iter().find(|c| normalize(&c.name) == key)
+        self.casinos.iter().position(|c| normalize(&c.name) == key)
     }
 }
 

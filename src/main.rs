@@ -3,6 +3,7 @@
 
 mod app;
 mod grail;
+mod logos;
 mod model;
 mod store;
 mod tax;
@@ -27,6 +28,8 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             theme::install(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            // Added last so it's tried first for http(s) images: casino logos, cached on disk.
+            logos::LogoLoader::install(&cc.egui_ctx);
             Ok(Box::new(app::App::new(&cc.egui_ctx)))
         }),
     )

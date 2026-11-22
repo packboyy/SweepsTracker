@@ -58,10 +58,13 @@ impl App {
                     for casino in &self.data.casinos {
                         let selected = self.view == View::Casino(casino.id);
                         let trailing = (casino.entry_count() > 0).then(|| {
-                            let net = casino.stats().net();
+                            let net = self.stats_of(casino.id).net();
                             (signed_money(net), profit_color(net))
                         });
-                        let logo = self.grail.find(&casino.name).map(|g| g.logo.as_str());
+                        let logo = self
+                            .cache
+                            .listing(&self.grail, casino.id)
+                            .map(|g| g.logo.as_str());
                         if theme::list_item(ui, &casino.name, selected, logo, trailing).clicked() {
                             self.view = View::Casino(casino.id);
                         }

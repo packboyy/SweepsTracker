@@ -20,7 +20,11 @@ impl App {
             .data
             .casinos
             .iter()
-            .filter_map(|c| self.grail.find(&c.name).map(|g| (g.slug.as_str(), c.id)))
+            .filter_map(|c| {
+                self.cache
+                    .listing(&self.grail, c.id)
+                    .map(|g| (g.slug.as_str(), c.id))
+            })
             .collect();
         let added_id = |slug: &str| added.iter().find(|(s, _)| *s == slug).map(|(_, id)| *id);
         let matches: Vec<&GrailCasino> = self

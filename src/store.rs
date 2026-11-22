@@ -270,7 +270,10 @@ impl Store {
             .map_err(err)?
             .collect::<Result<_, _>>()
             .map_err(err)?;
-        let index = |casinos: &[Casino], id: i64| casinos.iter().position(|c| c.id == id);
+        // Casino id -> position, so each entry finds its casino without scanning the list.
+        let positions: std::collections::HashMap<i64, usize> =
+            casinos.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
+        let index = |_: &[Casino], id: i64| positions.get(&id).copied();
 
         let mut stmt = self
             .conn

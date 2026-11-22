@@ -6,7 +6,7 @@ use crate::tax::{self, TaxSummary};
 
 impl App {
     pub(super) fn taxes(&mut self, ui: &mut egui::Ui) {
-        let years = tax::years(&self.data, today().year());
+        let years = self.cache.years.clone();
         if !years.contains(&self.tax_year) {
             self.tax_year = years[0];
         }
@@ -39,7 +39,11 @@ impl App {
             ui.label(dim("YEAR").small());
         });
 
-        let s = TaxSummary::for_year(&self.data, self.tax_year);
+        // Computed once per year shown (and again after data changes), not every frame.
+        if self.cache.tax.as_ref().map(|s| s.year) != Some(self.tax_year) {
+            self.cache.tax = Some(TaxSummary::for_year(&self.data, self.tax_year));
+        }
+        let Some(s) = &self.cache.tax else { return };
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -121,6 +125,7 @@ impl App {
         match std::fs::write(&path, tax::csv(&self.data, year)) {
             Ok(()) => {
                 self.status = None;
+                self.undo = None;
                 self.notice = Some(format!("Exported to {}", path.display()));
             }
             Err(e) => self.status = Some(format!("Couldn't export: {e}")),

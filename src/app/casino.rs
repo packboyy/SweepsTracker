@@ -9,7 +9,7 @@ impl App {
             return;
         };
 
-        let info = self.grail.find(&casino.name);
+        let info = self.cache.listing(&self.grail, id);
         // Buttons are laid out first (from the right) so they always get their space; the
         // logo, name and tier then fill what's left, and a long name truncates instead of
         // running under the buttons.
@@ -70,7 +70,7 @@ impl App {
             grail_info(ui, g);
             ui.add_space(8.0);
         }
-        stats_row(ui, casino.stats());
+        stats_row(ui, self.stats_of(id));
         ui.add_space(10.0);
 
         self.add_entry_form(ui, id);
@@ -433,7 +433,14 @@ impl App {
         }
         if let Some(entry) = delete {
             let result = self.db().delete_entry(entry);
-            self.apply(result);
+            if self.apply(result).is_some() {
+                let what = match entry {
+                    EntryRef::Purchase(_) => "a purchase",
+                    EntryRef::Redemption(_) => "a withdrawal",
+                    EntryRef::FreeCoins(_) => "a free SC entry",
+                };
+                self.deleted_notice(Undo::Entry(entry), what.to_string());
+            }
         }
         if let Some(id) = mark_received {
             let result = self.db().mark_received(id, today());

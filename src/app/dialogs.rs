@@ -231,6 +231,7 @@ impl App {
                 let result = self.db().delete_casino(id);
                 if self.apply(result).is_some() {
                     self.view = View::Overview;
+                    self.deleted_notice(Undo::Casino(id), format!("{name} and its entries"));
                 }
             }
             if delete || close {
