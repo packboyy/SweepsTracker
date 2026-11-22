@@ -1,6 +1,6 @@
 [package]
 name = "sweeps-tracker"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Track sweepstakes casino spending, coin discounts and withdrawals"
 
