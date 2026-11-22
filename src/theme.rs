@@ -479,6 +479,113 @@ pub fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Small drawn icons for the sidebar page links (drawn as shapes, so no font glyphs needed).
+#[derive(Clone, Copy)]
+pub enum NavIcon {
+    Overview,
+    Taxes,
+    Trash,
+}
+
+fn paint_nav_icon(p: &egui::Painter, icon: NavIcon, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(1.8_f32, color);
+    match icon {
+        // Three bars of a chart.
+        NavIcon::Overview => {
+            for (i, h) in [0.45, 0.8, 0.6].into_iter().enumerate() {
+                let w = rect.width() / 4.0;
+                let x = rect.left() + i as f32 * (w + w / 2.0);
+                let bar = Rect::from_min_max(
+                    egui::pos2(x, rect.bottom() - rect.height() * h),
+                    egui::pos2(x + w, rect.bottom()),
+                );
+                p.rect_filled(bar, 0.0, color);
+            }
+        }
+        // A receipt: outlined page with two lines of text.
+        NavIcon::Taxes => {
+            let page = rect.shrink2(Vec2::new(rect.width() * 0.15, 0.0));
+            p.rect_stroke(page.shrink(0.9), 0.0, stroke);
+            for f in [0.38, 0.62] {
+                let y = page.top() + page.height() * f;
+                p.line_segment(
+                    [
+                        egui::pos2(page.left() + 3.5, y),
+                        egui::pos2(page.right() - 3.5, y),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        // A bin: lid line, handle, and body.
+        NavIcon::Trash => {
+            let lid_y = rect.top() + rect.height() * 0.22;
+            p.line_segment(
+                [
+                    egui::pos2(rect.left(), lid_y),
+                    egui::pos2(rect.right(), lid_y),
+                ],
+                stroke,
+            );
+            let handle = Rect::from_min_max(
+                egui::pos2(rect.center().x - rect.width() * 0.18, rect.top()),
+                egui::pos2(rect.center().x + rect.width() * 0.18, lid_y),
+            );
+            p.rect_stroke(handle, 0.0, stroke);
+            let body = Rect::from_min_max(
+                egui::pos2(rect.left() + rect.width() * 0.15, lid_y),
+                egui::pos2(rect.right() - rect.width() * 0.15, rect.bottom()),
+            );
+            p.rect_stroke(body.shrink(0.9), 0.0, stroke);
+        }
+    }
+}
+
+/// Sidebar page link (Overview, Taxes, Recently deleted): a flat row with an icon, unlike
+/// the bordered casino cards. Tinted on hover, filled primary when it's the current page.
+pub fn nav_item(
+    ui: &mut egui::Ui,
+    icon: NavIcon,
+    text: &str,
+    selected: bool,
+    trailing: Option<String>,
+) -> Response {
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width() - 4.0, 34.0), Sense::click());
+    let p = ui.painter();
+    let color = if selected {
+        p.rect_filled(rect, 0.0, PRIMARY);
+        BG
+    } else {
+        if resp.hovered() {
+            p.rect_filled(rect, 0.0, CONTENT_BG_HOVER);
+        }
+        PRIMARY
+    };
+    let icon_rect =
+        Rect::from_center_size(rect.left_center() + Vec2::new(18.0, 0.0), Vec2::splat(15.0));
+    paint_nav_icon(p, icon, icon_rect, color);
+    p.text(
+        rect.left_center() + Vec2::new(36.0, 0.0),
+        Align2::LEFT_CENTER,
+        text,
+        FontId::new(15.0, bold()),
+        color,
+    );
+    if let Some(t) = trailing {
+        // Count badge, e.g. how many items are in Recently deleted.
+        let font = FontId::new(12.0, bold());
+        let galley = p.layout_no_wrap(t, font, if selected { PRIMARY } else { BG });
+        let badge = Rect::from_center_size(
+            rect.right_center() - Vec2::new(10.0 + galley.size().x / 2.0 + 6.0, 0.0),
+            galley.size() + Vec2::new(12.0, 4.0),
+        );
+        p.rect_filled(badge, 0.0, if selected { BG } else { PRIMARY });
+        p.galley(badge.center() - galley.size() / 2.0, galley, PRIMARY);
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// Casino logo (loaded from the web and cached by egui) inside a 1px primary border.
 pub fn logo_at(ui: &egui::Ui, url: &str, rect: Rect) {
     egui::Image::new(url).paint_at(ui, rect);

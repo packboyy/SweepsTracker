@@ -8,14 +8,18 @@ impl App {
         self.project_switcher(ui);
         ui.add_space(12.0);
 
-        if theme::list_item(ui, "Overview", self.view == View::Overview, None, None).clicked() {
-            self.view = View::Overview;
+        // Page links are flat rows with icons, so they don't look like the casino cards below.
+        let pages = [
+            (theme::NavIcon::Overview, "Overview", View::Overview),
+            (theme::NavIcon::Taxes, "Taxes", View::Taxes),
+        ];
+        for (icon, label, view) in pages {
+            if theme::nav_item(ui, icon, label, self.view == view, None).clicked() {
+                self.view = view;
+            }
+            ui.add_space(2.0);
         }
-        ui.add_space(8.0);
-        if theme::list_item(ui, "Taxes", self.view == View::Taxes, None, None).clicked() {
-            self.view = View::Taxes;
-        }
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         theme::section(ui, "Casinos");
 
         let full = Vec2::new(ui.available_width() - theme::SHADOW, 0.0);
@@ -37,9 +41,10 @@ impl App {
             .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 10.0)))
             .show_inside(ui, |ui| {
                 let count = self.deleted.casinos.len() + self.deleted.entries.len();
-                let trailing = (count > 0).then(|| (count.to_string(), DIM));
+                let trailing = (count > 0).then(|| count.to_string());
                 let selected = self.view == View::Trash;
-                if theme::list_item(ui, "Recently deleted", selected, None, trailing).clicked() {
+                let icon = theme::NavIcon::Trash;
+                if theme::nav_item(ui, icon, "Recently deleted", selected, trailing).clicked() {
                     self.view = View::Trash;
                 }
             });
