@@ -79,16 +79,32 @@ pub fn show(ctx: &egui::Context, project: Option<&str>) {
                 );
             }
 
+            // The version sits at the right edge (left of the window buttons off macOS).
+            let mut right = rect.right() - 14.0;
             if !cfg!(target_os = "macos") {
                 let bar = Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + BAR));
                 let buttons = egui::UiBuilder::new()
                     .max_rect(bar)
                     .layout(Layout::right_to_left(Align::Center));
-                ui.allocate_new_ui(buttons, |ui| {
+                let placed = ui.allocate_new_ui(buttons, |ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     window_buttons(ui);
                 });
+                right = placed.response.rect.left() - 14.0;
             }
+            let version = ui.painter().text(
+                egui::pos2(right, y),
+                Align2::RIGHT_CENTER,
+                format!(
+                    "v{} · build {}",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("BUILD_NUMBER")
+                ),
+                FontId::new(12.0, bold()),
+                BG.gamma_multiply(0.7),
+            );
+            ui.interact(version, ui.id().with("version"), Sense::hover())
+                .on_hover_text(format!("Built from commit {}", env!("BUILD_COMMIT")));
         });
 }
 

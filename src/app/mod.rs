@@ -198,20 +198,6 @@ fn date_picker<'a>(date: &'a mut NaiveDate, id: &'a str) -> DatePickerButton<'a>
         .calendar_week(false)
 }
 
-/// "v0.1.0 · build 24": the version, and the build number from `build.rs`.
-fn version_label() -> String {
-    format!(
-        "v{} · build {}",
-        env!("CARGO_PKG_VERSION"),
-        env!("BUILD_NUMBER")
-    )
-}
-
-/// The commit the app was built from, for the version label's hover text.
-fn build_commit() -> String {
-    format!("Built from commit {}", env!("BUILD_COMMIT"))
-}
-
 fn today() -> NaiveDate {
     Local::now().date_naive()
 }

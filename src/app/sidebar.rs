@@ -47,9 +47,6 @@ impl App {
                 if theme::nav_item(ui, icon, "Recently deleted", selected, trailing).clicked() {
                     self.view = View::Trash;
                 }
-                ui.add_space(8.0);
-                ui.label(dim(version_label()).small())
-                    .on_hover_text(build_commit());
             });
 
         // Rows are button-style cards now, so the list doesn't need its own box around it.

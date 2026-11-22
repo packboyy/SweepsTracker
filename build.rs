@@ -1,5 +1,5 @@
 //! Records the build number (how many commits there are) and the commit it was built from,
-//! for the version shown in the app ("v0.1.0 · build 24").
+//! for the version shown in the title bar ("v0.1.0 · build 24").
 
 use std::process::Command;
 
