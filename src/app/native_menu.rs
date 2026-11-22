@@ -79,7 +79,12 @@ impl NativeMenu {
             Some("About Sweeps Tracker"),
             Some(AboutMetadata {
                 name: Some("Sweeps Tracker".into()),
-                version: Some(env!("CARGO_PKG_VERSION").into()),
+                version: Some(format!(
+                    "{} (build {}, {})",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("BUILD_NUMBER"),
+                    env!("BUILD_COMMIT")
+                )),
                 ..Default::default()
             }),
         );

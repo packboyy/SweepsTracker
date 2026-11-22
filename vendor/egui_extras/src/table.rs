@@ -643,7 +643,14 @@ impl TableState {
                         InitialColumnSize::Automatic(_) => Size::exact(*prev_width),
                         InitialColumnSize::Remainder => Size::remainder(),
                     }
-                    .at_least(column.width_range.min.max(*max_used))
+                    // Patched: a clipped column may be narrower than its content (upstream
+                    // applied `max_used` here regardless, so a long truncated label made the
+                    // column, and the whole table, grow past the available width).
+                    .at_least(if column.clip {
+                        column.width_range.min
+                    } else {
+                        column.width_range.min.max(*max_used)
+                    })
                     .at_most(column.width_range.max)
                 };
                 sizing.add(size);

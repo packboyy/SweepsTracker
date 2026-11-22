@@ -198,6 +198,20 @@ fn date_picker<'a>(date: &'a mut NaiveDate, id: &'a str) -> DatePickerButton<'a>
         .calendar_week(false)
 }
 
+/// "v0.1.0 · build 24": the version, and the build number from `build.rs`.
+fn version_label() -> String {
+    format!(
+        "v{} · build {}",
+        env!("CARGO_PKG_VERSION"),
+        env!("BUILD_NUMBER")
+    )
+}
+
+/// The commit the app was built from, for the version label's hover text.
+fn build_commit() -> String {
+    format!("Built from commit {}", env!("BUILD_COMMIT"))
+}
+
 fn today() -> NaiveDate {
     Local::now().date_naive()
 }
@@ -326,7 +340,8 @@ fn stat_cell(
                     .color(color),
             );
             if let Some(detail) = detail {
-                ui.label(dim(detail).small());
+                // Cut off (full text on hover) rather than spill out of a narrow cell.
+                ui.add(egui::Label::new(dim(detail).small()).truncate());
             }
         });
     });
@@ -844,7 +859,7 @@ impl eframe::App for App {
         egui::SidePanel::left("sidebar")
             .resizable(true)
             .default_width(240.0)
-            .width_range(200.0..=300.0)
+            .width_range(200.0..=280.0)
             .frame(
                 egui::Frame::side_top_panel(&ctx.style())
                     .inner_margin(egui::Margin::symmetric(12.0, 8.0)),

@@ -50,4 +50,4 @@ cargo test
 - `src/main.rs` starts the app; `src/app/` has one file per screen (`sidebar`, `overview`, `casino`, `taxes`, `trash`, `picker`, `dialogs`, `project`) with shared state and helpers in `app/mod.rs`.
 - `src/model.rs` data types, cents parsing/formatting; `src/store.rs` the SQLite database and schema migrations; `src/tax.rs` tax-year summary and CSV export; `src/grail.rs` SweepsGrail scraper.
 - `src/theme.rs` colors, fonts and widgets; `src/titlebar.rs` the custom title bar.
-- `vendor/egui_extras/` is egui_extras 0.29.1 with one fix (the date picker's "today" uses local time) — see `[patch.crates-io]` in `Cargo.toml`.
+- `vendor/egui_extras/` is egui_extras 0.29.1 with two fixes (the date picker's "today" uses local time; clipped table columns don't grow to fit long text) — see `[patch.crates-io]` in `Cargo.toml`.

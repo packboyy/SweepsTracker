@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 NAME="Sweeps Tracker"
 APP="dist/$NAME.app"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+# Build number: how many commits there are (the same number the app shows, from build.rs).
+BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 0)
 
 cargo build --release
 
@@ -42,7 +44,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>$BUILD</string>
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.finance</string>
     <key>NSHighResolutionCapable</key><true/>

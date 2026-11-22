@@ -131,7 +131,8 @@ impl App {
                         "entry_kind",
                         &mut tab,
                         &["Purchase", "Withdrawal", "Free SC"],
-                        330.0,
+                        // Narrower in a small window, leaving room for the date and Today.
+                        (ui.available_width() - 300.0).clamp(270.0, 330.0),
                     );
                     f.kind = kinds[tab];
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -337,122 +338,142 @@ impl App {
         let max_height =
             (ui.available_height() - 2.0 * (theme::MARGIN + theme::BORDER) - theme::SHADOW - 4.0)
                 .max(80.0);
+        let small = |text: String, color: Color32| RichText::new(text).small().color(color);
         theme::boxed(ui, |ui| {
             TableBuilder::new(ui)
                 .striped(true)
-                .resizable(true)
+                // Not resizable: egui draws the resize handles as heavy column lines.
+                .resizable(false)
+                .sense(Sense::click())
                 .max_scroll_height(max_height)
                 .cell_layout(Layout::left_to_right(Align::Center))
-                // Fixed columns + minimums add up to ~680, which fits beside the widest
-                // sidebar at the smallest window size.
-                .column(Column::exact(85.0))
-                .column(Column::exact(80.0))
-                .column(Column::exact(90.0))
-                .column(Column::exact(70.0))
-                .column(Column::exact(95.0))
-                .column(Column::remainder().at_least(100.0).clip(true))
-                .column(Column::initial(110.0).at_least(50.0).clip(true))
-                .column(Column::exact(100.0))
-                .header(26.0, |mut header| {
-                    for h in [
-                        "DATE",
-                        "SPENT",
-                        "CC RECEIVED",
-                        "DISCOUNT",
-                        "WITHDRAWAL",
-                        "DETAILS",
-                        "NOTE",
-                        "",
+                // Fixed columns + the details minimum add up to ~520, which fits beside the
+                // widest sidebar at the smallest window size.
+                .column(Column::exact(82.0))
+                .column(Column::exact(74.0))
+                .column(Column::exact(84.0))
+                .column(Column::exact(56.0))
+                .column(Column::exact(54.0))
+                .column(Column::remainder().at_least(110.0).clip(true))
+                .column(Column::exact(58.0))
+                .header(22.0, |mut header| {
+                    for (h, right_aligned) in [
+                        ("DATE", false),
+                        ("TYPE", false),
+                        ("AMOUNT", true),
+                        ("CC", true),
+                        ("DISC.", true),
+                        ("DETAILS", false),
+                        ("", false),
                     ] {
                         header.col(|ui| {
-                            ui.label(dim(h).small());
+                            let rect = ui.max_rect();
+                            ui.painter().hline(
+                                rect.x_range(),
+                                rect.bottom(),
+                                Stroke::new(1.0_f32, theme::GRID),
+                            );
+                            if right_aligned {
+                                ui.with_layout(right, |ui| ui.label(dim(h).small()));
+                            } else {
+                                ui.label(dim(h).small());
+                            }
                         });
                     }
                 })
                 // Only rows on screen are laid out, so long histories scroll smoothly.
                 .body(|body| {
-                    body.rows(34.0, rows.len(), |mut row| {
+                    body.rows(26.0, rows.len(), |mut row| {
                         let r = &rows[row.index()];
                         row.col(|ui| {
                             ui.label(r.date().format("%-m/%-d/%Y").to_string());
                         });
-                        match r {
-                            Row::Purchase(p) => {
-                                row.col(|ui| {
-                                    if p.spent != 0 {
-                                        ui.with_layout(right, |ui| ui.label(money(p.spent)));
-                                    }
-                                });
-                                row.col(|ui| {
-                                    if p.cc_received != 0 {
-                                        ui.with_layout(right, |ui| ui.label(coins(p.cc_received)));
-                                    }
-                                });
-                                row.col(|ui| {
-                                    if let Some(d) = p.discount() {
-                                        ui.with_layout(right, |ui| ui.label(dim(percent(d))));
-                                    }
-                                });
-                                row.col(|_| {});
-                                row.col(|_| {});
-                            }
-                            Row::Redemption(red) => {
-                                for _ in 0..3 {
-                                    row.col(|_| {});
-                                }
-                                row.col(|ui| {
-                                    ui.with_layout(right, |ui| ui.label(money(red.amount)));
-                                });
-                                row.col(|ui| {
-                                    let mut details = red.method.label().to_string();
-                                    if red.fee > 0 {
-                                        details += &format!(" · {} fee", money(red.fee));
-                                    }
-                                    match red.received {
-                                        Some(d) => {
-                                            details +=
-                                                &format!(" · received {}", d.format("%-m/%-d/%Y"));
-                                            ui.label(dim(details));
-                                        }
-                                        None => {
-                                            ui.label(dim(details + " ·"));
-                                            if theme::button(ui, "Mark received")
-                                                .on_hover_text(
-                                                    "Record today as the date the money arrived",
-                                                )
-                                                .clicked()
-                                            {
-                                                mark_received = Some(red.id);
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                            Row::FreeCoins(f) => {
-                                for _ in 0..4 {
-                                    row.col(|_| {});
-                                }
-                                row.col(|ui| {
-                                    ui.label(format!("+{} free SC", coins(f.sc)));
-                                    ui.label(dim(format!("· {}", f.source.label())));
-                                });
-                            }
-                        }
+                        let (kind, kind_color) = match r {
+                            Row::Purchase(_) => ("Purchase", PRIMARY),
+                            Row::Redemption(_) => ("Withdrawal", GAIN),
+                            Row::FreeCoins(_) => ("Free SC", ACCENT),
+                        };
                         row.col(|ui| {
-                            ui.label(dim(r.note()));
+                            ui.label(small(kind.into(), kind_color));
+                        });
+                        // Amount, coins and discount; details are dim facts before the note.
+                        let (amount, cc, discount, details) = match r {
+                            Row::Purchase(p) => (
+                                (p.spent != 0).then(|| RichText::new(money(p.spent))),
+                                (p.cc_received != 0).then(|| coins(p.cc_received)),
+                                p.discount().map(percent),
+                                String::new(),
+                            ),
+                            Row::Redemption(red) => {
+                                let mut details = red.method.label().to_string();
+                                if red.fee > 0 {
+                                    details += &format!(" · {} fee", money(red.fee));
+                                }
+                                if let Some(d) = red.received {
+                                    details += &format!(" · received {}", d.format("%-m/%-d/%Y"));
+                                }
+                                let amount = RichText::new(format!("+{}", money(red.amount)));
+                                (Some(amount.color(GAIN)), None, None, details)
+                            }
+                            Row::FreeCoins(f) => (
+                                None,
+                                Some(format!("+{}", coins(f.sc))),
+                                None,
+                                f.source.label().to_string(),
+                            ),
+                        };
+                        row.col(|ui| {
+                            if let Some(amount) = amount {
+                                ui.with_layout(right, |ui| ui.label(amount));
+                            }
                         });
                         row.col(|ui| {
-                            if theme::button(ui, "Edit").clicked() {
+                            if let Some(cc) = cc {
+                                ui.with_layout(right, |ui| ui.label(cc));
+                            }
+                        });
+                        row.col(|ui| {
+                            if let Some(d) = discount {
+                                ui.with_layout(right, |ui| ui.label(dim(d)));
+                            }
+                        });
+                        row.col(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if !details.is_empty() {
+                                ui.label(dim(details));
+                            }
+                            if let Row::Redemption(red) = r {
+                                if red.is_pending() {
+                                    ui.label(small("PENDING".into(), LOSS));
+                                    if ui
+                                        .link(small("Mark received".into(), PRIMARY))
+                                        .on_hover_text("Record today as the date the money arrived")
+                                        .clicked()
+                                    {
+                                        mark_received = Some(red.id);
+                                    }
+                                }
+                            }
+                            // The note gets what's left; hover shows it in full if cut off.
+                            if !r.note().is_empty() {
+                                ui.add(egui::Label::new(r.note()).truncate());
+                            }
+                        });
+                        row.col(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if ui.link(small("Edit".into(), PRIMARY)).clicked() {
                                 edit = Some(r.edit_state());
                             }
-                            let size = ui.spacing().interact_size.y;
-                            if theme::x_button(ui, LOSS, PRIMARY, size)
+                            if theme::x_button(ui, LOSS, theme::GRID, 18.0)
                                 .on_hover_text("Delete (you can restore it from Recently deleted)")
                                 .clicked()
                             {
                                 delete = Some(r.entry_ref());
                             }
                         });
+                        if row.response().double_clicked() {
+                            edit = Some(r.edit_state());
+                        }
                     });
                 });
         });

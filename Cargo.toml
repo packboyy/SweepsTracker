@@ -30,7 +30,8 @@ muda = "0.15"
 opt-level = 3
 strip = true
 
-# Local copy of egui_extras 0.29.1 with one change: the date picker circles *today* using
-# the local date instead of UTC (vendor/egui_extras/src/datepicker/popup.rs).
+# Local copy of egui_extras 0.29.1 with two changes: the date picker circles *today* using
+# the local date instead of UTC (vendor/egui_extras/src/datepicker/popup.rs), and a clipped
+# table column no longer grows to fit its widest content (vendor/egui_extras/src/table.rs).
 [patch.crates-io]
 egui_extras = { path = "vendor/egui_extras" }

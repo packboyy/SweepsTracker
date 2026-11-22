@@ -276,6 +276,9 @@ impl App {
                     }
                 }
             }
+            ui.add_space(28.0);
+            ui.label(dim(version_label()).small())
+                .on_hover_text(build_commit());
         });
     }
 }
