@@ -4,11 +4,14 @@ A small desktop app for tracking sweepstakes casino purchases, coin discounts, a
 It runs on macOS, Windows, and Linux. It's written in Rust with [egui](https://github.com/emilk/egui).
 
 ## Features
-- One page per casino, with the same columns as the spreadsheet: **Date, Spent, CC Received, Withdrawal**
+- One page per casino, with the same columns as the spreadsheet: **Date, Spent, CC Received, Withdrawal**, plus free SC you collect (daily logins, signup bonuses, mail-in…)
+- **Withdrawals for taxes:** payout method (bank by default, gift card, crypto), fees, and pending/received status with the date the money arrived
+- **Taxes page:** per-year totals by received date, payout methods, estimated deductible losses, pending payouts, a per-casino breakdown, and **CSV export** for your tax preparer (estimates, not tax advice)
+- **Recently deleted:** deleted casinos and entries are kept and can be restored
 - The discount on every purchase is worked out for you (e.g. $85 for 100 CC = 15% off)
 - Totals for each casino and for all casinos: spent, coins received, withdrawn, and **net profit**
 - A chart of profit over time, plus a table comparing casinos
-- **Casino directory from [SweepsGrail](https://sweepsgrail.com/)**: "+ Add casino" opens a searchable dropdown with each casino's logo, tier, signup bonus and redemption speed. Each casino page shows the SweepsGrail details (redeem speed, minimum redemptions, daily freebie, VIP, parent company) and a link to the full review. The list is downloaded in the background and refreshed once a day (`sweepsgrail.json` in the app folder, shared by all projects).
+- **Casino directory from [SweepsGrail](https://sweepsgrail.com/)**: "+ Add casino" opens a searchable dropdown with each casino's logo, tier, signup bonus and redemption speed. Each casino page shows the SweepsGrail details (redeem speed, minimum redemptions, daily freebie, VIP, parent company) and a link to the full review. The list is downloaded in the background and refreshed once a day (`sweepsgrail.json` in the app folder, shared by all projects). Columns are found by their headers, so small layout changes on the site don't break it, and a snapshot of the list is built into the app for offline use or if the site changes too much.
 - **Paste from spreadsheet**: copy rows from Excel or Google Sheets and paste them in to import your existing data
 - **Projects, like VS Code**: each project is a folder holding a SQLite database (`sweeps.db`) and a `backups/` folder. Use the project switcher at the top of the sidebar (or ⌘N / ⌘O / ⇧⌘S) to create, open, switch between, or save a copy of projects. The last project reopens on launch.
   - **Storage:** amounts are whole cents (integers), never floating point. Purchases and redemptions are separate tables; every row has `created_at` / `updated_at`, and deleting only marks a row with `deleted_at`, so history is kept for taxes. The schema version is stored in the database and upgrades run automatically.
@@ -34,3 +37,9 @@ The built app is at `target/release/sweeps-tracker` (`sweeps-tracker.exe` on Win
 ```sh
 cargo test
 ```
+
+## Code layout
+- `src/main.rs` starts the app; `src/app/` has one file per screen (`sidebar`, `overview`, `casino`, `taxes`, `trash`, `picker`, `dialogs`, `project`) with shared state and helpers in `app/mod.rs`.
+- `src/model.rs` data types, cents parsing/formatting; `src/store.rs` the SQLite database and schema migrations; `src/tax.rs` tax-year summary and CSV export; `src/grail.rs` SweepsGrail scraper.
+- `src/theme.rs` colors, fonts and widgets; `src/titlebar.rs` the custom title bar.
+- `vendor/egui_extras/` is egui_extras 0.29.1 with one fix (the date picker's "today" uses local time) — see `[patch.crates-io]` in `Cargo.toml`.
