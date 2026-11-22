@@ -27,12 +27,16 @@ impl App {
             })
             .collect();
         let added_id = |slug: &str| added.iter().find(|(s, _)| *s == slug).map(|(_, id)| *id);
-        let matches: Vec<&GrailCasino> = self
+        let mut matches: Vec<&GrailCasino> = self
             .grail
             .casinos
             .iter()
             .filter(|g| query.is_empty() || grail::normalize(&g.name).contains(&query))
             .collect();
+        if self.picker.by_rating {
+            // Stable, so each tier keeps SweepsGrail's order.
+            matches.sort_by_key(|g| tier_rank(&g.tier));
+        }
         let exact = !typed.is_empty()
             && (self.data.has_casino_named(&typed) || self.grail.find(&typed).is_some());
         let picker = &mut self.picker;
@@ -66,6 +70,18 @@ impl App {
                             .map(|g| g.name.clone())
                             .or_else(|| (!typed.is_empty() && !exact).then(|| typed.clone()));
                     }
+                    ui.add_space(8.0);
+                    let mut sort = usize::from(picker.by_rating);
+                    let w = ui.available_width();
+                    theme::tab_bar(
+                        ui,
+                        "picker_sort",
+                        &mut sort,
+                        &["Default order", "Best rated first"],
+                        w,
+                    )
+                    .on_hover_text("Best rated: SweepsGrail community tier, S, A, B, then C");
+                    picker.by_rating = sort == 1;
                     ui.add_space(8.0);
                     if !typed.is_empty() && !exact {
                         if theme::button(ui, format!("+  Add \"{typed}\" as a custom casino"))
@@ -150,6 +166,17 @@ impl App {
         if close {
             self.picker.open = false;
         }
+    }
+}
+
+/// Sort position for a SweepsGrail tier: S, A, B, C, then unrated.
+fn tier_rank(tier: &str) -> u8 {
+    match tier {
+        "S" => 0,
+        "A" => 1,
+        "B" => 2,
+        "C" => 3,
+        _ => 4,
     }
 }
 

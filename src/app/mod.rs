@@ -84,6 +84,8 @@ struct Picker {
     focus: bool,
     /// Screen rect of the button that opens it; the dropdown hangs below this.
     anchor: egui::Rect,
+    /// Best SweepsGrail tier first (S, A, B, C) instead of SweepsGrail's own order.
+    by_rating: bool,
 }
 
 /// Actions from the native macOS menu bar.
@@ -454,6 +456,7 @@ impl App {
                 query: String::new(),
                 focus: false,
                 anchor: egui::Rect::NOTHING,
+                by_rating: false,
             },
             grail,
             grail_rx,
