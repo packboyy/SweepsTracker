@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Hundredths of a dollar (or of a coin, for CC amounts).
 pub type Cents = i64;
@@ -422,6 +423,22 @@ pub fn project_name(dir: &Path) -> String {
         .unwrap_or_else(|| dir.display().to_string())
 }
 
+/// Writes `path` via a temp file + rename, so neither a crash nor another window saving
+/// the same file at the same moment can leave it half-written. The temp name is unique to
+/// this process and call: with a shared one, two writers would write into the same temp
+/// file, and one could rename it into place while the other was still writing.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.{}-{n}.tmp", std::process::id()));
+    fs::write(&tmp, bytes)
+        .and_then(|_| fs::rename(&tmp, path))
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
+}
+
 /// Remembers recently opened project folders (most recent first).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -445,16 +462,23 @@ impl Config {
     pub fn save(&self) -> Result<(), String> {
         fs::create_dir_all(app_dir()).map_err(|e| e.to_string())?;
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        // Temp file + rename, so a crash mid-write can't leave a broken settings file.
-        let tmp = Self::path().with_extension("json.tmp");
-        fs::write(&tmp, json).map_err(|e| e.to_string())?;
-        fs::rename(&tmp, Self::path()).map_err(|e| e.to_string())
+        write_atomic(&Self::path(), json.as_bytes()).map_err(|e| e.to_string())
     }
 
     pub fn push_recent(&mut self, dir: &Path) {
         self.recent.retain(|d| d != dir);
         self.recent.insert(0, dir.to_path_buf());
         self.recent.truncate(Self::MAX_RECENT);
+    }
+
+    /// Changes the saved settings: re-reads them first, so a change made meanwhile by
+    /// another window isn't overwritten with this window's older copy, then saves and
+    /// keeps the result.
+    pub fn update(&mut self, change: impl FnOnce(&mut Config)) -> Result<(), String> {
+        let mut fresh = Config::load();
+        change(&mut fresh);
+        *self = fresh;
+        self.save()
     }
 }
 

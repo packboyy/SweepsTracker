@@ -92,9 +92,7 @@ impl GrailDb {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        let tmp = path.with_extension("json.tmp");
-        fs::write(&tmp, json).map_err(|e| e.to_string())?;
-        fs::rename(&tmp, path).map_err(|e| e.to_string())
+        crate::model::write_atomic(path, json.as_bytes()).map_err(|e| e.to_string())
     }
 
     pub fn is_stale(&self) -> bool {

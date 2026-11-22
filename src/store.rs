@@ -219,7 +219,8 @@ fn err(e: rusqlite::Error) -> String {
 
 impl Store {
     /// Opens (creating if needed) the project database in `dir`, takes the project lock,
-    /// applies migrations, and imports an old sweeps.json if this is a new database.
+    /// applies migrations, and imports an old sweeps.json if the database has never had
+    /// a casino.
     pub fn open(dir: &Path) -> Result<Store, String> {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let is_new = !has_database(dir);
@@ -238,12 +239,15 @@ impl Store {
             .map_err(err)?;
         let mut store = Store { conn };
         let legacy = dir.join(LEGACY_PROJECT_FILE);
+        // Not just "is the database new": if the app was killed during an earlier import,
+        // the database exists but is empty, and the import has to happen now.
+        let mut imported = false;
         let setup = store.migrate().and_then(|_| {
-            if is_new && legacy.exists() {
-                store.import_legacy_json(&legacy)
-            } else {
-                Ok(())
+            if legacy.exists() && store.never_had_casinos()? {
+                store.import_legacy_json(&legacy)?;
+                imported = true;
             }
+            Ok(())
         });
         if let Err(e) = setup {
             // Don't leave a half-made database behind: next time it would look like a real
@@ -255,7 +259,7 @@ impl Store {
             }
             return Err(e);
         }
-        if is_new && legacy.exists() {
+        if imported {
             let _ = fs::rename(&legacy, dir.join(format!("{LEGACY_PROJECT_FILE}.imported")));
         }
         Ok(store)
@@ -272,6 +276,13 @@ impl Store {
             .unwrap();
         store.migrate().unwrap();
         store
+    }
+
+    /// True for a database no casino was ever added to (deleted ones count as added).
+    fn never_had_casinos(&self) -> Result<bool, String> {
+        self.conn
+            .query_row("SELECT NOT EXISTS (SELECT 1 FROM casinos)", [], |r| r.get(0))
+            .map_err(err)
     }
 
     fn migrate(&mut self) -> Result<(), String> {
@@ -751,11 +762,22 @@ impl Store {
     }
 
     /// Writes a consistent copy of the database to `target` (which must not exist yet).
+    /// The copy is written under a temporary name and renamed when complete, so a crash
+    /// part-way never leaves a damaged file at `target` (for backups, that file would stop
+    /// the day's backup from being made again).
     pub fn copy_to(&self, target: &Path) -> Result<(), String> {
+        let name = target.file_name().unwrap_or_default().to_string_lossy();
+        let partial = target.with_file_name(format!(".{name}.partial"));
+        // Leftovers from a copy that was cut short.
+        let _ = fs::remove_file(&partial);
+        let _ = fs::remove_file(target.with_file_name(format!(".{name}.partial-journal")));
         self.conn
-            .execute("VACUUM INTO ?1", [target.to_string_lossy()])
-            .map(|_| ())
+            .execute("VACUUM INTO ?1", [partial.to_string_lossy()])
             .map_err(err)
+            .and_then(|_| fs::rename(&partial, target).map_err(|e| e.to_string()))
+            .inspect_err(|_| {
+                let _ = fs::remove_file(&partial);
+            })
     }
 
     /// Saves backups/sweeps-YYYY-MM-DD.db (once per day) and keeps the newest

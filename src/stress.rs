@@ -1000,3 +1000,680 @@ fn minimum_age_is_saved_and_survives_delete_and_restore() {
     // Only 18 and 21 are allowed.
     assert!(s.set_min_age(id, Some(19)).is_err());
 }
+
+// ---- Round 4: quitting, crashing and reopening ----
+//
+// These start a second copy of the app as a real process (this test binary, run again in
+// `child_process` mode), kill it at random moments like a crash or Force Quit, then reopen
+// the project here.
+
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
+
+/// A child process and the `@@`-marked lines it prints as it works.
+struct Child {
+    process: std::process::Child,
+    lines: mpsc::Receiver<String>,
+}
+
+impl Child {
+    fn spawn(mode: &str, dir: &Path) -> Child {
+        Child::spawn_with(mode, dir, &[])
+    }
+
+    /// With extra environment variables (e.g. HOME, so the app folder is a temp folder).
+    fn spawn_with(mode: &str, dir: &Path, env: &[(&str, &str)]) -> Child {
+        let mut process = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["stress::child_process", "--exact", "--ignored", "--nocapture"])
+            .env("SWEEPS_CHILD", mode)
+            .env("SWEEPS_DIR", dir)
+            .envs(env.iter().copied())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = process.stdout.take().unwrap();
+        let (tx, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                // libtest can print its own text on the same line, so find the marker.
+                if let Some(at) = line.find("@@") {
+                    let _ = tx.send(line[at + 2..].to_string());
+                }
+            }
+        });
+        Child { process, lines }
+    }
+
+    /// Waits for the child to print `what`; panics after 30 s.
+    fn wait_for(&self, what: &str) {
+        loop {
+            let line = self.lines.recv_timeout(Duration::from_secs(30)).expect(what);
+            if line == what {
+                return;
+            }
+        }
+    }
+
+    /// Kills it the hard way (SIGKILL: no cleanup runs, like a crash) and returns what it
+    /// reported before dying.
+    fn kill(mut self) -> Vec<String> {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+        // The reader thread ends when the pipe closes.
+        let mut seen = Vec::new();
+        while let Ok(line) = self.lines.recv_timeout(Duration::from_secs(5)) {
+            seen.push(line);
+        }
+        seen
+    }
+}
+
+fn say(line: &str) {
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "@@{line}").unwrap();
+    out.flush().unwrap();
+}
+
+/// Not a real test: the body of the child processes above (does nothing when run normally).
+#[test]
+#[ignore]
+fn child_process() {
+    let Ok(mode) = std::env::var("SWEEPS_CHILD") else {
+        return;
+    };
+    let dir = PathBuf::from(std::env::var("SWEEPS_DIR").unwrap());
+    let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    match mode.as_str() {
+        // Adds purchases one at a time (note "<pid>-<n>") and in 100-row pastes, reporting
+        // each after it's saved.
+        "write" => {
+            let mut s = Store::open(&dir).unwrap();
+            say("open");
+            let id = s.load().unwrap().casinos[0].id;
+            let pid = std::process::id();
+            for n in 1.. {
+                if n % 10 == 0 {
+                    let row = || ParsedRow {
+                        date,
+                        spent: 1,
+                        cc_received: 1,
+                        withdrawal: 0,
+                    };
+                    s.import_rows(id, &(0..100).map(|_| row()).collect::<Vec<_>>())
+                        .unwrap();
+                    say("batch");
+                } else {
+                    let note = format!("{pid}-{n}");
+                    s.add_purchase(id, date, n, n, &note).unwrap();
+                    say(&format!("one {note}"));
+                }
+            }
+        }
+        // What the app does when it opens a project: open (migrate / import) and back up.
+        "open" => {
+            let s = Store::open(&dir).unwrap();
+            s.backup(&dir).unwrap();
+            say("done");
+        }
+        // Saves the app settings (in $HOME's app folder) over and over; each copy writes
+        // its own recent list of SWEEPS_LEN paths.
+        "config" => {
+            let len: usize = std::env::var("SWEEPS_LEN").unwrap().parse().unwrap();
+            let pid = std::process::id();
+            let config = Config {
+                recent: (0..len).map(|i| PathBuf::from(format!("/{pid}/{i}"))).collect(),
+            };
+            for _ in 0..2_000 {
+                config.save().unwrap();
+            }
+            say("done");
+        }
+        // Saves a SweepsGrail cache of SWEEPS_LEN casinos to SWEEPS_DIR/sweepsgrail.json.
+        "grail" => {
+            let len: usize = std::env::var("SWEEPS_LEN").unwrap().parse().unwrap();
+            let mut db = crate::grail::GrailDb::load(Path::new("/nonexistent"));
+            db.fetched_at = std::process::id() as i64;
+            db.casinos.truncate(len);
+            for _ in 0..500 {
+                db.save(&dir.join("sweepsgrail.json")).unwrap();
+            }
+            say("done");
+        }
+        // Two windows, both started before either opened a project, each open one.
+        "two-windows" => {
+            let mut a = Config::load();
+            let mut b = Config::load();
+            a.update(|c| c.push_recent(Path::new("/projects/X"))).unwrap();
+            b.update(|c| c.push_recent(Path::new("/projects/Y"))).unwrap();
+            let saved = Config::load().recent;
+            say(&format!("recent {}", saved.len()));
+        }
+        // Keeps the project open until killed.
+        "hold" => {
+            let _s = Store::open(&dir).unwrap();
+            say("open");
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+        _ => panic!("unknown mode {mode}"),
+    }
+}
+
+fn integrity(db: &Path) -> String {
+    rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .and_then(|c| c.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)))
+        .unwrap_or_else(|e| e.to_string())
+}
+
+/// Killed mid-save, over and over: the project always reopens, undamaged, with every entry
+/// the app had finished saving, and pastes are all-or-nothing.
+#[test]
+fn crashing_while_saving_keeps_everything_saved() {
+    let dir = temp_dir("crash-write");
+    Store::open(&dir).unwrap().add_casino("A").unwrap();
+    let mut rng = Rng(0xc4a5);
+    let mut saved: Vec<String> = Vec::new();
+    let mut batches = 0;
+    for round in 0..25 {
+        let child = Child::spawn("write", &dir);
+        child.wait_for("open");
+        std::thread::sleep(Duration::from_millis(rng.below(80)));
+        for line in child.kill() {
+            match line.strip_prefix("one ") {
+                Some(note) => saved.push(note.to_string()),
+                None if line == "batch" => batches += 1,
+                None => {}
+            }
+        }
+
+        let s = Store::open(&dir).unwrap_or_else(|e| panic!("round {round}: {e}"));
+        let c = &s.load().unwrap().casinos[0];
+        let notes: std::collections::HashSet<&str> =
+            c.purchases.iter().map(|p| p.note.as_str()).collect();
+        for note in &saved {
+            assert!(notes.contains(note.as_str()), "round {round}: lost {note}");
+        }
+        let pasted = c.purchases.iter().filter(|p| p.note.is_empty()).count();
+        assert_eq!(pasted % 100, 0, "round {round}: half a paste was saved");
+        // At most one more paste than reported (saved, then killed before it said so).
+        assert!((batches..=batches + 1).contains(&(pasted / 100)));
+        batches = pasted / 100;
+        drop(s);
+        assert_eq!(integrity(&crate::store::db_path(&dir)), "ok", "round {round}");
+    }
+    assert!(saved.len() > 50, "the child barely ran: {}", saved.len());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A second running copy of the app is really refused (the lock tests above are inside
+/// one process), and a crashed copy doesn't leave the project locked.
+#[test]
+fn another_running_copy_is_refused_and_a_crash_releases_the_lock() {
+    let dir = temp_dir("crash-lock");
+    Store::open(&dir).unwrap();
+    let child = Child::spawn("hold", &dir);
+    child.wait_for("open");
+    assert!(crate::store::in_use(&dir));
+    assert_eq!(
+        Store::open(&dir).err().unwrap(),
+        "This project is already open in another Sweeps Tracker window."
+    );
+    child.kill();
+    assert!(!crate::store::in_use(&dir), "still locked after the other copy crashed");
+    Store::open(&dir).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Killed during the first open of an old sweeps.json project (while it's imported): the
+/// next open must still import it, once.
+#[test]
+fn crashing_during_an_old_project_import_still_imports_it() {
+    let entries: Vec<String> = (0..20_000)
+        .map(|i| format!(r#"{{"date":"2026-01-01","spent":1,"cc_received":1,"withdrawal":0,"note":"{i}"}}"#))
+        .collect();
+    let json = format!(r#"{{"casinos":[{{"name":"Old","entries":[{}]}}]}}"#, entries.join(","));
+    let dir = temp_dir("crash-import");
+    let fresh = |dir: &Path| {
+        let _ = std::fs::remove_dir_all(dir);
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(LEGACY_PROJECT_FILE), &json).unwrap();
+    };
+    // How long a whole open takes, so the kills land all through it.
+    fresh(&dir);
+    let start = Instant::now();
+    Child::spawn("open", &dir).wait_for("done");
+    let full = start.elapsed().as_millis() as u64;
+
+    let mut rng = Rng(0x1e9a);
+    for round in 0..30 {
+        fresh(&dir);
+        let child = Child::spawn("open", &dir);
+        std::thread::sleep(Duration::from_millis(rng.below(full + 1)));
+        child.kill();
+        let s = Store::open(&dir).unwrap_or_else(|e| panic!("round {round}: {e}"));
+        let data = s.load().unwrap();
+        let imported: usize = data.casinos.iter().map(|c| c.purchases.len()).sum();
+        assert_eq!(
+            (data.casinos.len(), imported),
+            (1, 20_000),
+            "round {round}: old project not imported (sweeps.json still there: {})",
+            dir.join(LEGACY_PROJECT_FILE).exists()
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Killed while the daily backup is being written: there must never be a damaged backup
+/// left behind (the next open the same day would see it and skip the backup).
+#[test]
+fn crashing_during_the_daily_backup_leaves_no_broken_backup() {
+    let dir = temp_dir("crash-backup");
+    {
+        let mut s = Store::open(&dir).unwrap();
+        fill(&mut s, 20, 300_000, 0xbac);
+    }
+    let backups = dir.join("backups");
+    let _ = std::fs::remove_dir_all(&backups);
+    let start = Instant::now();
+    Child::spawn("open", &dir).wait_for("done");
+    let full = start.elapsed().as_millis() as u64;
+
+    let mut rng = Rng(0xbac0);
+    for round in 0..30 {
+        let _ = std::fs::remove_dir_all(&backups);
+        let child = Child::spawn("open", &dir);
+        std::thread::sleep(Duration::from_millis(rng.below(full + 1)));
+        child.kill();
+        for file in std::fs::read_dir(&backups).into_iter().flatten().flatten() {
+            let path = file.path();
+            if path.extension().is_some_and(|e| e == "db") {
+                assert_eq!(integrity(&path), "ok", "round {round}: {}", path.display());
+            }
+        }
+        assert_eq!(integrity(&crate::store::db_path(&dir)), "ok");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Opening and closing a project many times doesn't leak open files or lose anything.
+#[test]
+fn opening_and_closing_hundreds_of_times() {
+    let dir = temp_dir("reopen");
+    let open_files = || std::fs::read_dir("/dev/fd").map(|d| d.count()).unwrap_or(0);
+    let id = Store::open(&dir).unwrap().add_casino("A").unwrap();
+    let before = open_files();
+    let date = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    for n in 1..=500 {
+        let s = Store::open(&dir).unwrap();
+        s.add_purchase(id, date, n, n, "").unwrap();
+        if n % 50 == 0 {
+            s.backup(&dir).unwrap();
+        }
+    }
+    // Other tests run alongside and open files too; a real leak here would be one or more
+    // per open, so hundreds.
+    assert!(open_files() <= before + 50, "{before} -> {} open files", open_files());
+    let s = Store::open(&dir).unwrap();
+    assert_eq!(s.load().unwrap().casinos[0].purchases.len(), 500);
+    drop(s);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ---- Round 5: several app windows sharing the app folder ----
+
+/// The app folder under a fake home directory (what `app_dir` gives with HOME=`home`).
+fn app_dir_in(home: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/SweepsTracker")
+    } else {
+        home.join(".local/share/SweepsTracker")
+    }
+}
+
+/// Runs `copies` writer processes (`mode`, each with a different SWEEPS_LEN) while reading
+/// `file` as fast as possible; every read must parse with `check`. Returns how many reads
+/// were made.
+fn race_writers(mode: &str, dir: &Path, home: &Path, file: &Path, check: impl Fn(&str) -> Result<(), String>) -> usize {
+    let lens = ["1", "40", "3", "90"];
+    let children: Vec<Child> = lens
+        .iter()
+        .map(|len| {
+            Child::spawn_with(mode, dir, &[("HOME", home.to_str().unwrap()), ("SWEEPS_LEN", len)])
+        })
+        .collect();
+    let mut reads = 0;
+    let mut finished = 0;
+    while finished < children.len() {
+        if let Ok(text) = std::fs::read_to_string(file) {
+            reads += 1;
+            if let Err(e) = check(&text) {
+                for c in children {
+                    c.kill();
+                }
+                panic!("read {reads}: {e}\n{}", &text[..text.len().min(300)]);
+            }
+        }
+        finished = children
+            .iter()
+            .filter(|c| c.lines.try_recv().is_ok_and(|l| l == "done"))
+            .count()
+            .max(finished);
+        if finished < children.len() && children.iter().all(|c| matches!(c.lines.try_recv(), Err(mpsc::TryRecvError::Disconnected))) {
+            break;
+        }
+    }
+    for c in children {
+        c.kill();
+    }
+    reads
+}
+
+/// Two windows saving the settings at the same moment must never leave a damaged
+/// config.json (which loads as empty: the recent projects list would be gone).
+#[test]
+fn windows_saving_settings_at_once_never_damage_them() {
+    let home = temp_dir("shared-config");
+    let file = app_dir_in(&home).join("config.json");
+    let reads = race_writers("config", &home, &home, &file, |text| {
+        let config: Config = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        // All paths must come from the same writer.
+        let owner = |p: &PathBuf| p.iter().nth(1).map(|s| s.to_owned());
+        let first = config.recent.first().map(owner);
+        if config.recent.iter().any(|p| Some(owner(p)) != first) {
+            return Err("recent list mixes two windows' saves".into());
+        }
+        Ok(())
+    });
+    assert!(reads > 100, "only {reads} reads");
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// Same for the shared SweepsGrail cache (a damaged one falls back to the built-in list).
+#[test]
+fn windows_saving_the_casino_list_at_once_never_damage_it() {
+    let home = temp_dir("shared-grail");
+    std::fs::create_dir_all(&home).unwrap();
+    let file = home.join("sweepsgrail.json");
+    let reads = race_writers("grail", &home, &home, &file, |text| {
+        let db: crate::grail::GrailDb = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if db.casinos.is_empty() {
+            return Err("empty list".into());
+        }
+        Ok(())
+    });
+    assert!(reads > 100, "only {reads} reads");
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+/// A window that has been open a while must not drop projects another window added to
+/// Recent when it saves its own change.
+#[test]
+fn two_windows_both_keep_their_recent_projects() {
+    let home = temp_dir("two-windows");
+    let child = Child::spawn_with("two-windows", &home, &[("HOME", home.to_str().unwrap())]);
+    let line = child.lines.recv_timeout(Duration::from_secs(30)).unwrap();
+    child.kill();
+    assert_eq!(line, "recent 2", "a window's project was dropped from Recent");
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+// ---- Round 6: damaged project files ----
+
+/// A project file damaged in every way we can think of (flipped bits, cut short, a page
+/// zeroed or overwritten with another page, garbage header) must give an error, never
+/// crash: the app reopens the last project at launch, so a crash here would repeat on
+/// every launch.
+#[test]
+fn damaged_project_files_never_crash() {
+    let dir = temp_dir("damaged-src");
+    {
+        let mut s = Store::open(&dir).unwrap();
+        fill(&mut s, 8, 3_000, 0xda3);
+        let c = s.add_casino("Deleted").unwrap();
+        s.add_purchase(c, NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), 5, 5, "x")
+            .unwrap();
+        s.delete_casino(c).unwrap();
+    }
+    let good = std::fs::read(crate::store::db_path(&dir)).unwrap();
+    let page = 4096;
+    let target = temp_dir("damaged");
+    let mut rng = Rng(0xda3a);
+    let (mut opened, mut refused) = (0, 0);
+    for round in 0..400 {
+        let mut bytes = good.clone();
+        let how = rng.below(6);
+        match how {
+            0 => {
+                for _ in 0..1 + rng.below(20) {
+                    let i = rng.below(bytes.len() as u64) as usize;
+                    bytes[i] ^= 1 << rng.below(8);
+                }
+            }
+            1 => bytes.truncate(rng.below(bytes.len() as u64) as usize),
+            2 => {
+                let p = rng.below((bytes.len() / page) as u64) as usize * page;
+                bytes[p..p + page].fill(0);
+            }
+            3 => {
+                let pages = bytes.len() / page;
+                let (from, to) = (rng.below(pages as u64) as usize, rng.below(pages as u64) as usize);
+                let copy = bytes[from * page..(from + 1) * page].to_vec();
+                bytes[to * page..(to + 1) * page].copy_from_slice(&copy);
+            }
+            4 => {
+                // The 100-byte header: page size, counts, schema cookie, user_version...
+                for _ in 0..1 + rng.below(4) {
+                    let i = rng.below(100) as usize;
+                    bytes[i] = rng.below(256) as u8;
+                }
+            }
+            _ => {
+                let i = rng.below(bytes.len() as u64) as usize;
+                let end = (i + 1 + rng.below(512) as usize).min(bytes.len());
+                for b in &mut bytes[i..end] {
+                    *b = rng.below(256) as u8;
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&target);
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(crate::store::db_path(&target), &bytes).unwrap();
+        // Everything the app does when it opens a project.
+        let outcome = std::panic::catch_unwind(|| match Store::open(&target) {
+            Ok(s) => {
+                let _ = s.load().and_then(|_| s.deleted()).map(|_| ());
+                let _ = s.backup(&target);
+                true
+            }
+            Err(_) => false,
+        });
+        match outcome {
+            Ok(true) => opened += 1,
+            Ok(false) => refused += 1,
+            Err(_) => panic!("round {round}: crashed on damage kind {how}"),
+        }
+    }
+    println!("damaged files: {opened} opened, {refused} refused");
+    let _ = std::fs::remove_dir_all(&target);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ---- Round 7: the tax CSV, read back by a strict parser ----
+
+/// RFC 4180 parser, independent of the export code: quoted fields may hold commas, quotes
+/// ("") and line breaks; anything malformed is an error.
+fn parse_csv_strict(text: &str) -> Result<Vec<Vec<String>>, String> {
+    let mut records = Vec::new();
+    let mut record = Vec::new();
+    let mut field = String::new();
+    let mut chars = text.chars().peekable();
+    let mut at_field_start = true;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if at_field_start => {
+                loop {
+                    match chars.next() {
+                        Some('"') if chars.peek() == Some(&'"') => {
+                            chars.next();
+                            field.push('"');
+                        }
+                        Some('"') => break,
+                        Some(c) => field.push(c),
+                        None => return Err("unterminated quote".into()),
+                    }
+                }
+                if !matches!(chars.peek(), Some(',') | Some('\n') | None) {
+                    return Err(format!("text after a closing quote: {field:?}"));
+                }
+                at_field_start = false;
+            }
+            '"' => return Err(format!("stray quote in {field:?}")),
+            ',' => {
+                record.push(std::mem::take(&mut field));
+                at_field_start = true;
+            }
+            '\n' => {
+                record.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut record));
+                at_field_start = true;
+            }
+            '\r' => return Err("bare carriage return outside quotes".into()),
+            c => {
+                field.push(c);
+                at_field_start = false;
+            }
+        }
+    }
+    if !record.is_empty() || !field.is_empty() {
+        return Err("last line has no line break".into());
+    }
+    Ok(records)
+}
+
+#[test]
+fn tax_csv_reads_back_exactly_and_matches_the_taxes_page() {
+    let texts = [
+        "", "plain", "a,b", "say \"hi\"", "line1\nline2", "crlf\r\nend", "cr\ronly", "=SUM(A1)",
+        "+1", "-1", "-5.50", "-", "-x", "@cmd", "\tTab", "\rCR", " =lead", "'quoted", "ﾟ✨🎰",
+        "\"", "\"\"", ",", "\n", "trailing space ", "שלום", "-1,000",
+    ];
+    let mut rng = Rng(0xc5f);
+    for round in 0..300 {
+        let mut text = || {
+            let a = *rng.pick(&texts);
+            let b = *rng.pick(&texts);
+            if rng.below(3) == 0 {
+                format!("{a}{b}")
+            } else {
+                a.to_string()
+            }
+        };
+        let mut data = Data::default();
+        let mut entries = 0;
+        let mut rng2 = Rng(round + 1);
+        for id in 0..1 + rng2.below(4) as i64 {
+            let date = |r: &mut Rng| {
+                NaiveDate::from_ymd_opt(2023 + r.below(4) as i32, 1 + r.below(12) as u32, 1 + r.below(28) as u32)
+                    .unwrap()
+            };
+            let mut c = Casino {
+                id,
+                name: format!("{}{id}", text()),
+                min_age: None,
+                purchases: vec![],
+                redemptions: vec![],
+                free_coins: vec![],
+            };
+            for i in 0..rng2.below(15) as i64 {
+                c.purchases.push(Purchase {
+                    id: i,
+                    date: date(&mut rng2),
+                    spent: rng2.below(1_000_000) as i64,
+                    cc_received: rng2.below(1_000_000) as i64,
+                    note: text(),
+                });
+            }
+            for i in 0..rng2.below(15) as i64 {
+                let amount = 1 + rng2.below(1_000_000) as i64;
+                let requested = date(&mut rng2);
+                c.redemptions.push(Redemption {
+                    id: i,
+                    date: requested,
+                    amount,
+                    method: *rng2.pick(&Method::ALL),
+                    fee: rng2.below(amount as u64 + 1) as i64,
+                    received: (rng2.below(3) > 0).then(|| requested + chrono::Days::new(rng2.below(40))),
+                    note: text(),
+                });
+            }
+            for i in 0..rng2.below(8) as i64 {
+                c.free_coins.push(FreeCoins {
+                    id: i,
+                    date: date(&mut rng2),
+                    sc: 1 + rng2.below(10_000) as i64,
+                    source: *rng2.pick(&Source::ALL),
+                    note: text(),
+                });
+            }
+            entries += c.entry_count();
+            data.casinos.push(c);
+        }
+
+        let out = tax::csv(&data, None);
+        let records = parse_csv_strict(&out).unwrap_or_else(|e| panic!("round {round}: {e}\n{out}"));
+        assert_eq!(records.len(), 1 + entries, "round {round}");
+        assert!(records.iter().all(|r| r.len() == 12), "round {round}: wrong field count");
+        // Every name and note comes back as written (formula-looking text gets one ').
+        let mut written: Vec<String> = Vec::new();
+        for c in &data.casinos {
+            for note in c.purchases.iter().map(|p| &p.note)
+                .chain(c.redemptions.iter().map(|r| &r.note))
+                .chain(c.free_coins.iter().map(|f| &f.note))
+            {
+                written.push(format!("{}|{}", c.name, note));
+            }
+        }
+        let unguard = |s: &str| s.strip_prefix('\'').map(str::to_string).unwrap_or(s.to_string());
+        let mut read: Vec<String> = records[1..].iter().map(|r| format!("{}|{}", unguard(&r[1]), unguard(&r[11]))).collect();
+        // A note that really starts with ' is written as-is, so unguard both sides alike.
+        let mut written: Vec<String> = written.iter().map(|w| {
+            let (n, note) = w.split_once('|').unwrap();
+            format!("{}|{}", unguard(n), unguard(note))
+        }).collect();
+        written.sort();
+        read.sort();
+        assert_eq!(read, written, "round {round}");
+        // No cell a spreadsheet would run as a formula.
+        for r in &records[1..] {
+            for cell in r {
+                let risky = cell.starts_with(['=', '+', '@', '\t', '\r'])
+                    || (cell.starts_with('-') && parse_cents(cell).is_none());
+                assert!(!risky, "round {round}: formula-like cell {cell:?}");
+            }
+        }
+
+        // Per-year exports add up to the Taxes page, and together they're the full export.
+        let mut rows_by_year = 0;
+        for year in tax::years(&data, 2026) {
+            let s = TaxSummary::for_year(&data, year);
+            let recs = parse_csv_strict(&tax::csv(&data, Some(year))).unwrap();
+            rows_by_year += recs.len() - 1;
+            let cents = |t: &str| parse_cents(t).unwrap();
+            let sum = |kind: &str, col: usize, received_only: bool| -> i64 {
+                recs[1..].iter()
+                    .filter(|r| r[0] == kind && (!received_only || r[4] == "Received"))
+                    .map(|r| cents(&r[col]))
+                    .sum()
+            };
+            assert_eq!(sum("Purchase", 5, false), s.purchases, "round {round} {year} purchases");
+            assert_eq!(sum("Redemption", 5, true), s.redeemed, "round {round} {year} redeemed");
+            assert_eq!(sum("Redemption", 9, true), s.fees, "round {round} {year} fees");
+            assert_eq!(sum("Free SC", 7, false), s.free_sc, "round {round} {year} free SC");
+        }
+        assert_eq!(rows_by_year, entries, "round {round}: per-year exports miss or repeat rows");
+    }
+}

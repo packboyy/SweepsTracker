@@ -54,8 +54,7 @@ impl App {
         self.store = Some(store);
         self.project = Some(dir.to_path_buf());
         self.reload();
-        self.config.push_recent(dir);
-        let _ = self.config.save();
+        let _ = self.config.update(|c| c.push_recent(dir));
         self.reset_view();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
             "{} — Sweeps Tracker",
@@ -110,8 +109,7 @@ impl App {
                 if store::is_project(&dir) {
                     self.open_project(ctx, &dir);
                 } else {
-                    self.config.recent.retain(|d| d != &dir);
-                    let _ = self.config.save();
+                    let _ = self.config.update(|c| c.recent.retain(|d| d != &dir));
                     self.status = Some(format!(
                         "{} no longer has a project, so it was removed from Recent.",
                         dir.display()

@@ -126,11 +126,9 @@ impl BytesLoader for LogoLoader {
             let entry = match download(&uri) {
                 Ok(bytes) => {
                     let _ = fs::create_dir_all(&dir);
-                    // Temp file + rename: a crash can't leave a half-written logo behind.
-                    let tmp = path.with_extension("tmp");
-                    if fs::write(&tmp, &bytes).is_ok() {
-                        let _ = fs::rename(&tmp, &path);
-                    }
+                    // A crash, or another window saving the same logo, can't leave a
+                    // half-written file behind.
+                    let _ = crate::model::write_atomic(&path, &bytes);
                     Entry::Ready(bytes.into())
                 }
                 Err(e) => Entry::Failed(e),
