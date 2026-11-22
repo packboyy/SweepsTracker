@@ -419,28 +419,27 @@ pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Option row in a dropdown: the current choice is tinted with a primary bar on its left
-/// (no text marker, so it fits narrow menus).
+/// Option row in a dropdown: the current choice is filled primary with white text (like
+/// the selected sidebar row); others get a clear tint on hover.
 pub fn menu_option(ui: &mut egui::Ui, label: &str, selected: bool) -> Response {
     let (rect, resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
     let p = ui.painter();
-    if selected || resp.hovered() {
-        p.rect_filled(rect, 0.0, STRIPE);
-    }
-    if selected {
-        let bar = Rect::from_min_size(
-            rect.left_top() + Vec2::new(0.0, 6.0),
-            Vec2::new(PAD, rect.height() - 12.0),
-        );
-        p.rect_filled(bar, 0.0, PRIMARY);
-    }
+    let text_color = if selected {
+        p.rect_filled(rect, 0.0, PRIMARY);
+        BG
+    } else {
+        if resp.hovered() {
+            p.rect_filled(rect, 0.0, CONTENT_BG_HOVER);
+        }
+        PRIMARY
+    };
     p.text(
         rect.left_center() + Vec2::new(12.0, 0.0),
         Align2::LEFT_CENTER,
         label,
         FontId::new(14.5, bold()),
-        PRIMARY,
+        text_color,
     );
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -451,7 +450,7 @@ pub fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> Response {
         ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(rect, 0.0, STRIPE);
+        p.rect_filled(rect, 0.0, CONTENT_BG_HOVER);
     }
     p.text(
         rect.left_center() + Vec2::new(10.0, 0.0),
