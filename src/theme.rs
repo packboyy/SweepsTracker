@@ -10,6 +10,14 @@ use eframe::egui::{
 pub const BG: Color32 = Color32::WHITE;
 /// Main content area, tinted so the white sidebar and white boxes stand out against it.
 pub const CONTENT_BG: Color32 = Color32::from_rgb(0xdc, 0xdf, 0xfa);
+/// Placeholder text in inputs: washed out so it can't be mistaken for a typed value.
+pub const HINT: Color32 = Color32::from_rgb(0xb4, 0xb7, 0xee);
+
+/// Placeholder text styled with `HINT`.
+pub fn hint(text: &str) -> egui::RichText {
+    egui::RichText::new(text).color(HINT)
+}
+
 /// Hovered tinted row (e.g. an addable casino in the dropdown).
 pub const CONTENT_BG_HOVER: Color32 = Color32::from_rgb(0xc8, 0xcd, 0xf7);
 pub const PRIMARY: Color32 = Color32::from_rgb(0x64, 0x64, 0xff);

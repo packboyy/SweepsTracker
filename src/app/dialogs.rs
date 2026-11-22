@@ -152,7 +152,7 @@ impl App {
                             egui::TextEdit::multiline(text)
                                 .font(egui::TextStyle::Monospace)
                                 .desired_rows(12)
-                                .hint_text("3/13/2026\t90\t100\t\n3/14/2026\t\t\t500"),
+                                .hint_text(theme::hint("3/13/2026\t90\t100\t\n3/14/2026\t\t\t500")),
                             476.0,
                         );
                     });

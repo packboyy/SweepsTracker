@@ -193,7 +193,12 @@ fn dim(text: impl Into<String>) -> RichText {
 /// Amount text field; returns its response so callers can detect Enter.
 fn amount_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) -> egui::Response {
     let invalid = !text.trim().is_empty() && parse_cents(text).is_none_or(|v| v < 0);
-    let mut edit = egui::TextEdit::singleline(text).hint_text(hint);
+    // Examples read "e.g. 85" in a washed-out color so they don't look like real values.
+    let placeholder = match hint.parse::<f64>() {
+        Ok(v) if v != 0.0 => format!("e.g. {hint}"),
+        _ => hint.to_string(),
+    };
+    let mut edit = egui::TextEdit::singleline(text).hint_text(theme::hint(&placeholder));
     if invalid {
         edit = edit.text_color(LOSS);
     }

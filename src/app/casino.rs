@@ -175,7 +175,7 @@ impl App {
                         });
                         let r2 = field_cell(&mut cols[2], false, "FEE $", |ui| {
                             let w = fill_width(ui);
-                            amount_field(ui, &mut f.fee, "0", w)
+                            amount_field(ui, &mut f.fee, "none", w)
                         });
                         submit |= submitted(&cols[2], &r2);
                         field_cell(&mut cols[3], false, "STATUS", |ui| {
@@ -221,7 +221,7 @@ impl App {
                     let w = fill_width(ui);
                     theme::input(
                         ui,
-                        egui::TextEdit::singleline(&mut f.note).hint_text("optional"),
+                        egui::TextEdit::singleline(&mut f.note).hint_text(theme::hint("optional")),
                         w,
                     )
                 });

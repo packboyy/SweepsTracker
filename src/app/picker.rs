@@ -51,7 +51,7 @@ impl App {
                     let r = theme::input(
                         ui,
                         egui::TextEdit::singleline(&mut picker.query)
-                            .hint_text("Search SweepsGrail casinos…"),
+                            .hint_text(theme::hint("Search SweepsGrail casinos…")),
                         ui.available_width(),
                     );
                     if std::mem::take(&mut picker.focus) {
