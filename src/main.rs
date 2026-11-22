@@ -11,6 +11,7 @@ mod stress;
 mod tax;
 mod theme;
 mod titlebar;
+mod update;
 
 use eframe::egui;
 

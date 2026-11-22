@@ -17,6 +17,7 @@ use crate::model::*;
 use crate::store::{self, Deleted, EntryRef, Store};
 use crate::theme::{self, ACCENT, DIM, GAIN, LOSS, PRIMARY};
 use crate::titlebar;
+use crate::update;
 use chrono::{Datelike, Local, NaiveDate};
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Key, Layout, RichText, Sense, Stroke, Vec2,
@@ -104,6 +105,7 @@ enum Command {
     PasteRows,
     Go(View),
     SweepsGrail,
+    CheckForUpdates,
 }
 
 /// File-menu / shortcut / welcome-screen actions, run after the frame's UI is drawn
@@ -175,6 +177,9 @@ pub struct App {
     grail: GrailDb,
     grail_rx: Option<Receiver<Result<GrailDb, String>>>,
     grail_error: Option<String>,
+    /// "Check for updates" (GitHub releases): what the title bar shows, and the running check.
+    update: update::State,
+    update_rx: Option<Receiver<Result<update::Outcome, String>>>,
     form: EntryForm,
     editing: Option<EditState>,
     /// Paste-rows dialog: casino, pasted text, and the rows parsed from it (re-parsed only
@@ -462,6 +467,8 @@ impl App {
             grail,
             grail_rx,
             grail_error: None,
+            update: update::State::Idle,
+            update_rx: None,
             form: EntryForm {
                 kind: Kind::Purchase,
                 date: today(),
@@ -676,6 +683,7 @@ impl App {
             }
             Command::Go(view) if has_project => self.view = view,
             Command::SweepsGrail => ctx.open_url(egui::OpenUrl::new_tab(grail::SITE)),
+            Command::CheckForUpdates => self.check_for_updates(ctx),
             _ => {}
         }
     }
@@ -690,6 +698,43 @@ impl App {
     fn start_grail_fetch(&mut self, ctx: &egui::Context) {
         self.grail_error = None;
         self.grail_rx = Some(grail::fetch_in_background(ctx.clone(), GrailDb::path()));
+    }
+
+    /// Asks GitHub for the latest release in the background (title bar / app menu).
+    fn check_for_updates(&mut self, ctx: &egui::Context) {
+        if self.update_rx.is_none() {
+            self.update = update::State::Checking;
+            self.update_rx = Some(update::check_in_background(ctx.clone()));
+        }
+    }
+
+    /// Picks up the update check once it finishes and says how it went.
+    fn poll_update(&mut self) {
+        let result = self.update_rx.as_ref().and_then(|rx| match rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Err("the check stopped unexpectedly".into())),
+        });
+        let Some(result) = result else { return };
+        self.update_rx = None;
+        self.update = update::State::Idle;
+        let version = env!("CARGO_PKG_VERSION");
+        match result {
+            Ok(update::Outcome::UpToDate) => {
+                self.notice = Some(format!("You have the latest version (v{version})."));
+            }
+            Ok(update::Outcome::NoReleases) => {
+                self.notice = Some("No releases have been published on GitHub yet.".into());
+            }
+            Ok(update::Outcome::Available(release)) => {
+                self.notice = Some(format!(
+                    "{} is available. Click it in the title bar to download it.",
+                    release.tag
+                ));
+                self.update = update::State::Available(release);
+            }
+            Err(e) => self.status = Some(format!("Couldn't check for updates: {e}")),
+        }
     }
 
     /// Picks up the background SweepsGrail fetch once it finishes.
@@ -792,6 +837,7 @@ fn dialog(ctx: &egui::Context, title: &str, add_contents: impl FnOnce(&mut egui:
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_grail();
+        self.poll_update();
         #[cfg(target_os = "macos")]
         {
             let on_casino = matches!(self.view, View::Casino(_)) && self.project.is_some();
@@ -807,7 +853,15 @@ impl eframe::App for App {
         }
         // Title bar first so it spans the full window width above the sidebar.
         let project = self.project.as_deref().map(project_name);
-        titlebar::show(ctx, project.as_deref());
+        if titlebar::show(ctx, project.as_deref(), &self.update) {
+            match &self.update {
+                update::State::Idle => self.check_for_updates(ctx),
+                update::State::Checking => {}
+                update::State::Available(release) => {
+                    ctx.open_url(egui::OpenUrl::new_tab(&release.url));
+                }
+            }
+        }
         titlebar::resize_edges(ctx);
 
         let shortcut = |key: Key, shift: bool| {

@@ -35,7 +35,10 @@ pub fn configure(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
     }
 }
 
-pub fn show(ctx: &egui::Context, project: Option<&str>) {
+/// Draws the title bar. Returns true when the version (or the update notice in its place)
+/// was clicked.
+pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::State) -> bool {
+    let mut version_clicked = false;
     egui::TopBottomPanel::top("title_bar")
         .exact_height(HEIGHT)
         .frame(egui::Frame::none().fill(PRIMARY))
@@ -92,20 +95,55 @@ pub fn show(ctx: &egui::Context, project: Option<&str>) {
                 });
                 right = placed.response.rect.left() - 14.0;
             }
-            let version = ui.painter().text(
+            // Click to check GitHub for a newer release; once one is found it takes the
+            // version's place, and clicking it opens the release's download page.
+            use crate::update::State;
+            let current = format!(
+                "v{} · build {}",
+                env!("CARGO_PKG_VERSION"),
+                env!("BUILD_NUMBER")
+            );
+            let (text, color, tip) = match update {
+                State::Idle => (
+                    current,
+                    BG.gamma_multiply(0.7),
+                    format!(
+                        "Built from commit {}. Click to check for updates.",
+                        env!("BUILD_COMMIT")
+                    ),
+                ),
+                State::Checking => (
+                    "Checking for updates…".into(),
+                    BG.gamma_multiply(0.7),
+                    "Asking GitHub for the latest release".into(),
+                ),
+                State::Available(release) => (
+                    format!("{} available · Download", release.tag),
+                    ACCENT,
+                    format!("You have {current}. Click to open the release on GitHub."),
+                ),
+            };
+            let label = ui.painter().text(
                 egui::pos2(right, y),
                 Align2::RIGHT_CENTER,
-                format!(
-                    "v{} · build {}",
-                    env!("CARGO_PKG_VERSION"),
-                    env!("BUILD_NUMBER")
-                ),
+                text,
                 FontId::new(12.0, bold()),
-                BG.gamma_multiply(0.7),
+                color,
             );
-            ui.interact(version, ui.id().with("version"), Sense::hover())
-                .on_hover_text(format!("Built from commit {}", env!("BUILD_COMMIT")));
+            let resp = ui.interact(label.expand(3.0), ui.id().with("version"), Sense::click());
+            if resp.hovered() && *update != State::Checking {
+                ui.painter().hline(
+                    label.x_range(),
+                    label.bottom() + 1.0,
+                    egui::Stroke::new(1.0_f32, color),
+                );
+            }
+            version_clicked = resp
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(tip)
+                .clicked();
         });
+    version_clicked
 }
 
 #[derive(Clone, Copy)]

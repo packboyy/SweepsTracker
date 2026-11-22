@@ -73,6 +73,7 @@ impl NativeMenu {
             Command::Go(View::Trash),
         );
         let website = item("SweepsGrail Website", None, Command::SweepsGrail);
+        let check_updates = item("Check for Updates…", None, Command::CheckForUpdates);
 
         let separator = PredefinedMenuItem::separator;
         let about = PredefinedMenuItem::about(
@@ -93,6 +94,7 @@ impl NativeMenu {
             true,
             &[
                 &about,
+                &check_updates,
                 &separator(),
                 &PredefinedMenuItem::services(None),
                 &separator(),
