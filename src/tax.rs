@@ -5,7 +5,7 @@
 //! - Deductible losses (only if itemizing) can't exceed winnings, and from tax year 2026
 //!   only 90% of losses are deductible (2025 tax law).
 
-use crate::model::{Cents, Data, Method};
+use crate::model::{parse_cents, Cents, Data, Method};
 use chrono::{Datelike, NaiveDate};
 
 #[derive(Debug, Default, PartialEq)]
@@ -143,6 +143,18 @@ fn plain(cents: Cents) -> String {
 }
 
 fn csv_field(s: &str) -> String {
+    // Spreadsheet apps run cells starting with = + - @ (or a tab / carriage return) as
+    // formulas. Text like that (notes, casino names) gets a leading ' so it stays text;
+    // plain negative numbers are left alone.
+    let looks_like_formula = s.starts_with(['=', '+', '@', '\t', '\r'])
+        || (s.starts_with('-') && parse_cents(s).is_none());
+    let owned;
+    let s = if looks_like_formula {
+        owned = format!("'{s}");
+        owned.as_str()
+    } else {
+        s
+    };
     if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {

@@ -175,7 +175,9 @@ pub struct App {
     grail_error: Option<String>,
     form: EntryForm,
     editing: Option<EditState>,
-    pasting: Option<(i64, String)>,
+    /// Paste-rows dialog: casino, pasted text, and the rows parsed from it (re-parsed only
+    /// when the text changes, not every frame).
+    pasting: Option<(i64, String, Vec<ParsedRow>)>,
     renaming: Option<(i64, String)>,
     confirm_delete: Option<i64>,
     /// Error message shown in a red bar at the bottom.
@@ -660,7 +662,7 @@ impl App {
             }
             Command::PasteRows => {
                 if let View::Casino(id) = self.view {
-                    self.pasting = Some((id, String::new()));
+                    self.pasting = Some((id, String::new(), Vec::new()));
                 }
             }
             Command::Go(view) if has_project => self.view = view,

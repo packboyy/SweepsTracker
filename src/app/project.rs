@@ -31,13 +31,19 @@ impl App {
     /// Opens (or creates) the project in `dir`. An old sweeps.json there is imported into
     /// the new database the first time.
     pub(super) fn open_project(&mut self, ctx: &egui::Context, dir: &Path) {
-        // Release the current project's lock first (it may be the same folder).
-        self.store = None;
+        // Reopening the same folder: release its lock first. Otherwise open the new one
+        // before letting go of the current one, so a failure (e.g. it's open in another
+        // window) leaves you where you were.
+        if self.project.as_deref() == Some(dir) {
+            self.store = None;
+        }
         let store = match Store::open(dir) {
             Ok(store) => store,
             Err(e) => {
                 self.status = Some(format!("Couldn't open {}: {e}", project_name(dir)));
-                self.close_project(ctx);
+                if self.store.is_none() {
+                    self.close_project(ctx);
+                }
                 return;
             }
         };
@@ -129,6 +135,11 @@ impl App {
                             == rfd::MessageDialogResult::Yes;
                     if self.project.as_deref() == Some(dir.as_path()) {
                         self.status = Some("That's the folder this project is already in.".into());
+                    } else if overwrite && store::in_use(&dir) {
+                        self.status = Some(format!(
+                            "\"{}\" is open in another Sweeps Tracker window; close it there first.",
+                            project_name(&dir)
+                        ));
                     } else if overwrite {
                         // VACUUM INTO needs a path that doesn't exist yet.
                         let target = store::db_path(&dir);

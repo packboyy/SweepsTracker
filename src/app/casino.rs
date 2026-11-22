@@ -29,7 +29,7 @@ impl App {
                 .on_hover_text("Import rows copied from Excel or Google Sheets")
                 .clicked()
             {
-                self.pasting = Some((id, String::new()));
+                self.pasting = Some((id, String::new(), Vec::new()));
             }
             if let Some(g) = info.filter(|g| !g.review_url.is_empty()) {
                 if theme::button(ui, "Review")
@@ -89,7 +89,9 @@ impl App {
             Kind::Purchase => {
                 ok(&f.spent) && ok(&f.cc) && (cents(&f.spent) > 0 || cents(&f.cc) > 0)
             }
-            Kind::Withdrawal => cents(&f.amount) > 0 && ok(&f.fee),
+            Kind::Withdrawal => {
+                cents(&f.amount) > 0 && ok(&f.fee) && cents(&f.fee) <= cents(&f.amount)
+            }
             Kind::FreeSc => cents(&f.sc) > 0,
         };
         // Flush grid like the boxes above: a top cell with the type tabs and date, then a row
@@ -342,90 +344,91 @@ impl App {
                         });
                     }
                 })
-                .body(|mut body| {
-                    for r in &rows {
-                        body.row(34.0, |mut row| {
-                            row.col(|ui| {
-                                ui.label(r.date().format("%-m/%-d/%Y").to_string());
-                            });
-                            match r {
-                                Row::Purchase(p) => {
-                                    row.col(|ui| {
-                                        if p.spent != 0 {
-                                            ui.with_layout(right, |ui| ui.label(money(p.spent)));
-                                        }
-                                    });
-                                    row.col(|ui| {
-                                        if p.cc_received != 0 {
-                                            ui.with_layout(right, |ui| {
-                                                ui.label(coins(p.cc_received))
-                                            });
-                                        }
-                                    });
-                                    row.col(|ui| {
-                                        if let Some(d) = p.discount() {
-                                            ui.with_layout(right, |ui| ui.label(dim(percent(d))));
-                                        }
-                                    });
-                                    row.col(|_| {});
-                                    row.col(|_| {});
-                                }
-                                Row::Redemption(red) => {
-                                    for _ in 0..3 {
-                                        row.col(|_| {});
-                                    }
-                                    row.col(|ui| {
-                                        ui.with_layout(right, |ui| ui.label(money(red.amount)));
-                                    });
-                                    row.col(|ui| {
-                                        let mut details = red.method.label().to_string();
-                                        if red.fee > 0 {
-                                            details += &format!(" · {} fee", money(red.fee));
-                                        }
-                                        match red.received {
-                                            Some(d) => {
-                                                details += &format!(" · received {}", d.format("%-m/%-d/%Y"));
-                                                ui.label(dim(details));
-                                            }
-                                            None => {
-                                                ui.label(dim(details + " ·"));
-                                                if theme::button(ui, "Mark received")
-                                                    .on_hover_text("Record today as the date the money arrived")
-                                                    .clicked()
-                                                {
-                                                    mark_received = Some(red.id);
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                                Row::FreeCoins(f) => {
-                                    for _ in 0..4 {
-                                        row.col(|_| {});
-                                    }
-                                    row.col(|ui| {
-                                        ui.label(format!("+{} free SC", coins(f.sc)));
-                                        ui.label(dim(format!("· {}", f.source.label())));
-                                    });
-                                }
-                            }
-                            row.col(|ui| {
-                                ui.label(dim(r.note()));
-                            });
-                            row.col(|ui| {
-                                if theme::button(ui, "Edit").clicked() {
-                                    edit = Some(r.edit_state());
-                                }
-                                let size = ui.spacing().interact_size.y;
-                                if theme::x_button(ui, LOSS, PRIMARY, size)
-                                    .on_hover_text("Delete (you can restore it from Recently deleted)")
-                                    .clicked()
-                                {
-                                    delete = Some(r.entry_ref());
-                                }
-                            });
+                // Only rows on screen are laid out, so long histories scroll smoothly.
+                .body(|body| {
+                    body.rows(34.0, rows.len(), |mut row| {
+                        let r = &rows[row.index()];
+                        row.col(|ui| {
+                            ui.label(r.date().format("%-m/%-d/%Y").to_string());
                         });
-                    }
+                        match r {
+                            Row::Purchase(p) => {
+                                row.col(|ui| {
+                                    if p.spent != 0 {
+                                        ui.with_layout(right, |ui| ui.label(money(p.spent)));
+                                    }
+                                });
+                                row.col(|ui| {
+                                    if p.cc_received != 0 {
+                                        ui.with_layout(right, |ui| ui.label(coins(p.cc_received)));
+                                    }
+                                });
+                                row.col(|ui| {
+                                    if let Some(d) = p.discount() {
+                                        ui.with_layout(right, |ui| ui.label(dim(percent(d))));
+                                    }
+                                });
+                                row.col(|_| {});
+                                row.col(|_| {});
+                            }
+                            Row::Redemption(red) => {
+                                for _ in 0..3 {
+                                    row.col(|_| {});
+                                }
+                                row.col(|ui| {
+                                    ui.with_layout(right, |ui| ui.label(money(red.amount)));
+                                });
+                                row.col(|ui| {
+                                    let mut details = red.method.label().to_string();
+                                    if red.fee > 0 {
+                                        details += &format!(" · {} fee", money(red.fee));
+                                    }
+                                    match red.received {
+                                        Some(d) => {
+                                            details +=
+                                                &format!(" · received {}", d.format("%-m/%-d/%Y"));
+                                            ui.label(dim(details));
+                                        }
+                                        None => {
+                                            ui.label(dim(details + " ·"));
+                                            if theme::button(ui, "Mark received")
+                                                .on_hover_text(
+                                                    "Record today as the date the money arrived",
+                                                )
+                                                .clicked()
+                                            {
+                                                mark_received = Some(red.id);
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                            Row::FreeCoins(f) => {
+                                for _ in 0..4 {
+                                    row.col(|_| {});
+                                }
+                                row.col(|ui| {
+                                    ui.label(format!("+{} free SC", coins(f.sc)));
+                                    ui.label(dim(format!("· {}", f.source.label())));
+                                });
+                            }
+                        }
+                        row.col(|ui| {
+                            ui.label(dim(r.note()));
+                        });
+                        row.col(|ui| {
+                            if theme::button(ui, "Edit").clicked() {
+                                edit = Some(r.edit_state());
+                            }
+                            let size = ui.spacing().interact_size.y;
+                            if theme::x_button(ui, LOSS, PRIMARY, size)
+                                .on_hover_text("Delete (you can restore it from Recently deleted)")
+                                .clicked()
+                            {
+                                delete = Some(r.entry_ref());
+                            }
+                        });
+                    });
                 });
         });
 

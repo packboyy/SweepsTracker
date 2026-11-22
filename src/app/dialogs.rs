@@ -93,7 +93,9 @@ impl App {
                     EntryRef::Purchase(_) => {
                         ok(&ed.spent) && ok(&ed.cc) && (cents(&ed.spent) > 0 || cents(&ed.cc) > 0)
                     }
-                    EntryRef::Redemption(_) => cents(&ed.amount) > 0 && ok(&ed.fee),
+                    EntryRef::Redemption(_) => {
+                        cents(&ed.amount) > 0 && ok(&ed.fee) && cents(&ed.fee) <= cents(&ed.amount)
+                    }
                     EntryRef::FreeCoins(_) => cents(&ed.sc) > 0,
                 };
                 ui.add_space(8.0);
@@ -133,11 +135,10 @@ impl App {
             }
         }
 
-        if let Some((casino_id, text)) = &mut self.pasting {
+        if let Some((casino_id, text, rows)) = &mut self.pasting {
             let casino_id = *casino_id;
             let mut close = false;
             let mut import = false;
-            let rows = parse_spreadsheet(text);
             dialog(ctx, "Paste from spreadsheet", |ui| {
                 ui.label("Copy rows from Excel / Google Sheets and paste them below.");
                 ui.label(dim(
@@ -147,7 +148,7 @@ impl App {
                 egui::ScrollArea::vertical()
                     .max_height(260.0)
                     .show(ui, |ui| {
-                        theme::input(
+                        let edited = theme::input(
                             ui,
                             egui::TextEdit::multiline(text)
                                 .font(egui::TextStyle::Monospace)
@@ -155,6 +156,9 @@ impl App {
                                 .hint_text(theme::hint("3/13/2026\t90\t100\t\n3/14/2026\t\t\t500")),
                             476.0,
                         );
+                        if edited.changed() {
+                            *rows = parse_spreadsheet(text);
+                        }
                     });
                 let s = Stats {
                     spent: rows.iter().map(|r| r.spent).sum(),
@@ -177,6 +181,7 @@ impl App {
                 });
             });
             if import {
+                let rows = std::mem::take(rows);
                 let result = self.db().import_rows(casino_id, &rows);
                 self.apply(result);
             }

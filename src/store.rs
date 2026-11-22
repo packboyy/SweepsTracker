@@ -181,6 +181,26 @@ pub struct Store {
     conn: Connection,
 }
 
+/// Whether the project in `dir` is open in a Sweeps Tracker window right now (its database
+/// is exclusively locked).
+pub fn in_use(dir: &Path) -> bool {
+    if !has_database(dir) {
+        return false;
+    }
+    let Ok(conn) = Connection::open(db_path(dir)) else {
+        return false;
+    };
+    let _ = conn.busy_timeout(std::time::Duration::ZERO);
+    let locked = conn
+        .query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .err()
+        .and_then(|e| e.sqlite_error_code())
+        .is_some_and(|c| matches!(c, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked));
+    locked
+}
+
 fn err(e: rusqlite::Error) -> String {
     match e.sqlite_error_code() {
         Some(ErrorCode::DatabaseBusy) | Some(ErrorCode::DatabaseLocked) => {
@@ -213,10 +233,25 @@ impl Store {
         conn.execute_batch("BEGIN EXCLUSIVE; COMMIT;")
             .map_err(err)?;
         let mut store = Store { conn };
-        store.migrate()?;
         let legacy = dir.join(LEGACY_PROJECT_FILE);
+        let setup = store.migrate().and_then(|_| {
+            if is_new && legacy.exists() {
+                store.import_legacy_json(&legacy)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(e) = setup {
+            // Don't leave a half-made database behind: next time it would look like a real
+            // (empty) project and the old sweeps.json would never be imported.
+            if is_new {
+                drop(store);
+                let _ = fs::remove_file(db_path(dir));
+                let _ = fs::remove_file(dir.join(format!("{DB_FILE}-journal")));
+            }
+            return Err(e);
+        }
         if is_new && legacy.exists() {
-            store.import_legacy_json(&legacy)?;
             let _ = fs::rename(&legacy, dir.join(format!("{LEGACY_PROJECT_FILE}.imported")));
         }
         Ok(store)
@@ -494,11 +529,13 @@ impl Store {
     }
 
     pub fn add_redemption(&self, casino_id: i64, r: &RedemptionInput) -> Result<i64, String> {
+        check_redemption(r)?;
         insert_redemption(&self.conn, casino_id, r)?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update_redemption(&self, id: i64, r: &RedemptionInput) -> Result<(), String> {
+        check_redemption(r)?;
         self.conn
             .execute(
                 &format!(
@@ -696,6 +733,14 @@ impl Store {
         }
         prune_backups(&backups)
     }
+}
+
+/// Rules the table's CHECKs can't express (the fee column came later, in migration 2).
+fn check_redemption(r: &RedemptionInput) -> Result<(), String> {
+    if r.fee > r.amount {
+        return Err("The fee can't be more than the withdrawal amount.".into());
+    }
+    Ok(())
 }
 
 fn insert_redemption(conn: &Connection, casino_id: i64, r: &RedemptionInput) -> Result<(), String> {

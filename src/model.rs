@@ -307,7 +307,14 @@ pub fn parse_spreadsheet(text: &str) -> Vec<ParsedRow> {
             let sep = if line.contains('\t') { '\t' } else { ',' };
             let cols: Vec<&str> = line.split(sep).map(str::trim).collect();
             let date = parse_date(cols.first()?)?;
-            let num = |i: usize| cols.get(i).and_then(|s| parse_cents(s)).unwrap_or(0);
+            // Negative amounts aren't meaningful here; treat them like blanks so the
+            // preview and the import agree.
+            let num = |i: usize| {
+                cols.get(i)
+                    .and_then(|s| parse_cents(s))
+                    .filter(|v| *v >= 0)
+                    .unwrap_or(0)
+            };
             let row = ParsedRow {
                 date,
                 spent: num(1),
@@ -403,7 +410,10 @@ impl Config {
     pub fn save(&self) -> Result<(), String> {
         fs::create_dir_all(app_dir()).map_err(|e| e.to_string())?;
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(Self::path(), json).map_err(|e| e.to_string())
+        // Temp file + rename, so a crash mid-write can't leave a broken settings file.
+        let tmp = Self::path().with_extension("json.tmp");
+        fs::write(&tmp, json).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, Self::path()).map_err(|e| e.to_string())
     }
 
     pub fn push_recent(&mut self, dir: &Path) {

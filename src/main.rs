@@ -6,6 +6,8 @@ mod grail;
 mod logos;
 mod model;
 mod store;
+#[cfg(test)]
+mod stress;
 mod tax;
 mod theme;
 mod titlebar;

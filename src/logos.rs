@@ -126,7 +126,11 @@ impl BytesLoader for LogoLoader {
             let entry = match download(&uri) {
                 Ok(bytes) => {
                     let _ = fs::create_dir_all(&dir);
-                    let _ = fs::write(&path, &bytes);
+                    // Temp file + rename: a crash can't leave a half-written logo behind.
+                    let tmp = path.with_extension("tmp");
+                    if fs::write(&tmp, &bytes).is_ok() {
+                        let _ = fs::rename(&tmp, &path);
+                    }
                     Entry::Ready(bytes.into())
                 }
                 Err(e) => Entry::Failed(e),
