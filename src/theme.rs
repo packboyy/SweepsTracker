@@ -91,6 +91,8 @@ pub fn install(ctx: &egui::Context) {
     style.spacing.item_spacing = Vec2::new(10.0, 8.0);
     style.spacing.button_padding = Vec2::new(12.0, 5.0);
     style.spacing.interact_size.y = 26.0;
+    // Dropdown / popup menus: rows run edge to edge, just inside the 2px border.
+    style.spacing.menu_margin = egui::Margin::same(BORDER);
 
     let v = &mut style.visuals;
     v.override_text_color = Some(PRIMARY);
@@ -381,10 +383,16 @@ pub fn project_button(ui: &mut egui::Ui, name: &str) -> Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Height of a text input (`input`): the minimum text-edit height plus the 6 pt padding
+/// above and below. Dropdowns and the primary button use it so a form row lines up.
+pub fn control_height(ui: &egui::Ui) -> f32 {
+    ui.spacing().interact_size.y + 12.0
+}
+
 /// Dropdown button drawn at exactly `width` (egui's ComboBox doesn't keep to a given width):
 /// white with a 2px border, hard shadow that presses in, value on the left and ▾ on the right.
 pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
-    let height = ui.spacing().interact_size.y + 4.0;
+    let height = control_height(ui);
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     let offset = if resp.is_pointer_button_down_on() {
         1.0
@@ -664,7 +672,7 @@ pub fn input(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32) -> Respons
 pub fn primary_button(ui: &mut egui::Ui, enabled: bool, text: &str, width: f32) -> Response {
     let button = egui::Button::new(egui::RichText::new(text).color(BG))
         .fill(PRIMARY)
-        .min_size(Vec2::new(width, 0.0));
+        .min_size(Vec2::new(width, control_height(ui)));
     let resp = shadowed(ui, |ui| ui.add_enabled(enabled, button));
     if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
