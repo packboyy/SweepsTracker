@@ -2,7 +2,7 @@
 # Builds "Sweeps Tracker.app" in dist/ with the app icon.
 #
 #   scripts/bundle-mac.sh            # build dist/Sweeps Tracker.app
-#   scripts/bundle-mac.sh --install  # ...and copy it to /Applications
+#   scripts/bundle-mac.sh --install  # ...move it to /Applications (no copy left in dist/)
 #
 # The icon comes from assets/icon.png (rebuild that from the artwork with
 # scripts/make-icon.swift).
@@ -57,5 +57,8 @@ echo "Built $APP"
 if [ "${1:-}" = "--install" ]; then
     rm -rf "/Applications/$NAME.app"
     cp -R "$APP" /Applications/
+    # Remove the build copy so Spotlight / Launchpad don't list the app twice.
+    rm -rf "$APP"
+    rmdir dist 2>/dev/null || true
     echo "Installed /Applications/$NAME.app"
 fi
