@@ -163,27 +163,38 @@ fn amount_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) ->
     theme::input(ui, edit, width)
 }
 
-/// Dropdown with a hard shadow like the other controls, `width` wide.
-fn choice<T: Copy + PartialEq>(
+/// Dropdown exactly `width` wide, in the app's style; its menu uses the same rows as the
+/// project menu, with the current choice marked.
+fn choice<T: Copy + PartialEq, S: Into<String>>(
     ui: &mut egui::Ui,
     id: &str,
     value: &mut T,
     options: &[T],
-    label: fn(T) -> &'static str,
+    label: impl Fn(T) -> S,
     width: f32,
 ) -> egui::Response {
-    theme::shadowed(ui, |ui| {
-        egui::ComboBox::from_id_salt(id)
-            .width(width - 2.0 * ui.spacing().button_padding.x)
-            .selected_text(label(*value))
-            .show_ui(ui, |ui| {
-                for &option in options {
-                    ui.selectable_value(value, option, label(option));
+    let label = |v: T| -> String { label(v).into() };
+    let resp = theme::select_button(ui, &label(*value), width);
+    let popup_id = ui.make_persistent_id(id);
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    }
+    egui::popup::popup_below_widget(
+        ui,
+        popup_id,
+        &resp,
+        egui::popup::PopupCloseBehavior::CloseOnClick,
+        |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for &option in options {
+                let mark = if option == *value { "current" } else { "" };
+                if theme::menu_item(ui, &label(option), mark).clicked() {
+                    *value = option;
                 }
-            })
-            .response
-    })
-    .on_hover_cursor(egui::CursorIcon::PointingHand)
+            }
+        },
+    );
+    resp
 }
 
 fn status_label(received: bool) -> &'static str {

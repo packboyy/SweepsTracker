@@ -28,16 +28,14 @@ impl App {
             {
                 export = Some(Some(year));
             }
-            theme::shadowed(ui, |ui| {
-                egui::ComboBox::from_id_salt("tax_year")
-                    .selected_text(year.to_string())
-                    .show_ui(ui, |ui| {
-                        for y in &years {
-                            ui.selectable_value(&mut self.tax_year, *y, y.to_string());
-                        }
-                    })
-                    .response
-            });
+            choice(
+                ui,
+                "tax_year",
+                &mut self.tax_year,
+                &years,
+                |y| y.to_string(),
+                110.0,
+            );
             ui.label(dim("YEAR").small());
         });
 

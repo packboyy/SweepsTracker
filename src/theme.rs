@@ -381,6 +381,43 @@ pub fn project_button(ui: &mut egui::Ui, name: &str) -> Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Dropdown button drawn at exactly `width` (egui's ComboBox doesn't keep to a given width):
+/// white with a 2px border, hard shadow that presses in, value on the left and ▾ on the right.
+pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
+    let height = ui.spacing().interact_size.y + 4.0;
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    let offset = if resp.is_pointer_button_down_on() {
+        1.0
+    } else if resp.hovered() {
+        2.0
+    } else {
+        3.0
+    };
+    let p = ui.painter();
+    p.rect_filled(rect.translate(Vec2::splat(offset)), 0.0, PRIMARY);
+    p.rect_filled(rect, 0.0, if resp.hovered() { STRIPE } else { BG });
+    p.rect_stroke(rect.shrink(BORDER / 2.0), 0.0, Stroke::new(BORDER, PRIMARY));
+    let clip = Rect::from_min_max(rect.min, egui::pos2(rect.right() - 24.0, rect.bottom()));
+    p.with_clip_rect(clip).text(
+        rect.left_center() + Vec2::new(10.0, 0.0),
+        Align2::LEFT_CENTER,
+        text,
+        FontId::new(15.0, bold()),
+        PRIMARY,
+    );
+    let (cx, cy, h) = (rect.right() - 13.0, rect.center().y, 4.5);
+    p.add(Shape::convex_polygon(
+        vec![
+            egui::pos2(cx - h, cy - h * 0.6),
+            egui::pos2(cx + h, cy - h * 0.6),
+            egui::pos2(cx, cy + h * 0.6),
+        ],
+        PRIMARY,
+        Stroke::NONE,
+    ));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// Full-width row in a dropdown menu: bold label, optional shortcut on the right.
 pub fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: &str) -> Response {
     let (rect, resp) =
