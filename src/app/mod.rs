@@ -87,6 +87,8 @@ struct Picker {
     anchor: egui::Rect,
     /// Best SweepsGrail tier first (S, A, B, C) instead of SweepsGrail's own order.
     by_rating: bool,
+    /// Showing the casinos hidden from the list (the trash tab) instead of the list.
+    show_hidden: bool,
 }
 
 /// Actions from the native macOS menu bar.
@@ -246,8 +248,21 @@ fn choice<T: Copy + PartialEq, S: Into<String>>(
     label: impl Fn(T) -> S,
     width: f32,
 ) -> egui::Response {
+    let height = theme::control_height(ui);
+    choice_sized(ui, id, value, options, label, Vec2::new(width, height))
+}
+
+/// `choice` at a given size, e.g. to match the buttons beside it in a page header.
+fn choice_sized<T: Copy + PartialEq, S: Into<String>>(
+    ui: &mut egui::Ui,
+    id: &str,
+    value: &mut T,
+    options: &[T],
+    label: impl Fn(T) -> S,
+    size: Vec2,
+) -> egui::Response {
     let label = |v: T| -> String { label(v).into() };
-    let resp = theme::select_button(ui, &label(*value), width);
+    let resp = theme::select_button(ui, &label(*value), size.x, size.y);
     let popup_id = ui.make_persistent_id(id);
     if resp.clicked() {
         ui.memory_mut(|m| m.toggle_popup(popup_id));
@@ -269,7 +284,7 @@ fn choice<T: Copy + PartialEq, S: Into<String>>(
     resp
 }
 
-/// "18+" / "21+"
+/// "1-day streak" / "12-day streak"
 fn streak_text(days: u32) -> String {
     if days == 1 {
         "1-day streak".into()
@@ -483,6 +498,7 @@ impl App {
                 focus: false,
                 anchor: egui::Rect::NOTHING,
                 by_rating: false,
+                show_hidden: false,
             },
             grail,
             grail_rx,

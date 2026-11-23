@@ -20,21 +20,22 @@ impl App {
             {
                 export = Some(None);
             }
-            if theme::button(ui, format!("Export {year}"))
+            let export_year = theme::button(ui, format!("Export {year}"))
                 .on_hover_text(format!(
                     "{year}'s entries as a CSV file for your tax preparer"
-                ))
-                .clicked()
-            {
+                ));
+            if export_year.clicked() {
                 export = Some(Some(year));
             }
-            choice(
+            // Same height as the Export buttons beside it.
+            let size = Vec2::new(110.0, export_year.rect.height());
+            choice_sized(
                 ui,
                 "tax_year",
                 &mut self.tax_year,
                 &years,
                 |y| y.to_string(),
-                110.0,
+                size,
             );
             ui.label(dim("YEAR").small());
         });
@@ -54,7 +55,7 @@ impl App {
                 ui.add_space(10.0);
                 summary(ui, &s);
                 ui.add_space(14.0);
-                deductible(ui, &s);
+                filing(ui, &s);
                 ui.add_space(20.0);
 
                 theme::section(ui, "Pending redemptions");
@@ -172,36 +173,99 @@ fn summary(ui: &mut egui::Ui, s: &TaxSummary) {
     ui.add_space(theme::SHADOW);
 }
 
-/// The estimated deductible losses, with the rule spelled out.
-fn deductible(ui: &mut egui::Ui, s: &TaxSummary) {
+/// The two ways to file side by side: what each adds to AGI (which decides credits like the
+/// AOTC) in large type, then the amounts behind it as label / amount rows, then a note.
+fn filing(ui: &mut egui::Ui, s: &TaxSummary) {
+    let pct = s.loss_percent();
+    let costs = |what: &str| {
+        if pct < 100 {
+            format!("{pct}% of {what}")
+        } else {
+            what.to_string()
+        }
+    };
+    let casual = s.casual_agi();
+    let pro = s.schedule_c_agi();
+    let cells = [
+        (
+            "CASUAL PLAYER",
+            casual,
+            casual < pro,
+            vec![
+                ("Redemptions, all counted as income".to_string(), s.redeemed),
+                (
+                    format!("Losses ({}), only if you itemize", costs("purchases")),
+                    s.deductible_losses(),
+                ),
+            ],
+        ),
+        (
+            "PROFESSIONAL · SCHEDULE C",
+            pro,
+            pro < casual,
+            vec![
+                (
+                    format!("Profit after {}", costs("purchases and fees")),
+                    s.schedule_c_profit(),
+                ),
+                (
+                    "Self-employment tax (half deducted)".to_string(),
+                    s.self_employment_tax(),
+                ),
+            ],
+        ),
+    ];
     theme::boxed_flush(ui, |ui| {
-        theme::grid_cell(ui, true, true, None, CELL_PAD, |ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
-            ui.label(dim("ESTIMATED DEDUCTIBLE LOSSES (ONLY IF YOU ITEMIZE)").small());
-            ui.label(
-                RichText::new(money(s.deductible_losses()))
-                    .size(22.0)
-                    .family(theme::bold()),
-            );
-            ui.label(dim(format!(
-                "{}% of {} in purchases, but never more than the {} you redeemed. With the \
-                 standard deduction, losses don't reduce what you owe on redemptions.",
-                s.loss_percent(),
-                money(s.purchases),
-                money(s.redeemed),
-            )));
+        ui.columns(2, |cols| {
+            for (c, (col, (title, agi, lower, rows))) in cols.iter_mut().zip(cells).enumerate() {
+                col.spacing_mut().item_spacing = Vec2::ZERO;
+                theme::grid_cell(col, c == 0, true, None, CELL_PAD, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(dim(title).small());
+                        if lower {
+                            theme::tag(ui, "LOWER AGI", GAIN);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(money(agi)).size(26.0).family(theme::bold()));
+                        ui.label(dim("added to AGI"));
+                    });
+                    ui.add_space(4.0);
+                    // Label in a fixed-width column (wrapping if it must), amount in a
+                    // right-aligned column after it.
+                    let amount_width = 110.0;
+                    for (label, amount) in rows {
+                        let label_width = ui.available_width() - amount_width;
+                        ui.horizontal_top(|ui| {
+                            ui.allocate_ui(Vec2::new(label_width, 0.0), |ui| {
+                                ui.set_width(label_width);
+                                ui.add(egui::Label::new(dim(label).small()).wrap());
+                            });
+                            let size = Vec2::new(ui.available_width(), 0.0);
+                            ui.allocate_ui_with_layout(
+                                size,
+                                Layout::right_to_left(Align::Min),
+                                |ui| {
+                                    ui.label(RichText::new(money(amount)).family(theme::bold()));
+                                },
+                            );
+                        });
+                    }
+                });
+            }
         });
-        // The figure above is for casual players; mention the other way it can be filed.
         theme::grid_cell(ui, true, false, Some(theme::STRIPE), CELL_PAD, |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
-            ui.label(dim("OR FILE AS A PROFESSIONAL GAMBLER").small());
+            ui.label(
+                RichText::new("A lower AGI can keep credits like the AOTC.").family(theme::bold()),
+            );
             ui.label(dim(
-                "If you play regularly to make a profit and keep records of it (like this \
-                 app), you may qualify as a professional gambler and file on Schedule C. \
-                 Losses are then deducted while still taking the standard deduction (capped at \
-                 winnings), but the profit owes self-employment tax (about 15.3%). Which way \
-                 comes out better depends on your income and credits, so ask your tax preparer.",
-            ));
+                "If you play regularly to make a profit and keep records of it (like this app), \
+                 you may qualify to file as a professional gambler on Schedule C and still take \
+                 the standard deduction. Estimates only; ask your tax preparer which way is \
+                 better for you.",
+            ).small());
         });
     });
     ui.add_space(theme::SHADOW);

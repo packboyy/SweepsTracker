@@ -12,6 +12,11 @@ impl App {
         let mut add: Option<String> = None;
         let mut open: Option<i64> = None;
         let mut refresh = false;
+        // Hiding a casino from the list / putting a hidden one back (SweepsGrail slugs).
+        let mut hide: Option<String> = None;
+        let mut unhide: Option<String> = None;
+        let hidden = &self.config.hidden_casinos;
+        let show_hidden = self.picker.show_hidden;
 
         let query = grail::normalize(&self.picker.query);
         let typed = self.picker.query.trim().to_string();
@@ -32,6 +37,8 @@ impl App {
             .casinos
             .iter()
             .filter(|g| query.is_empty() || grail::normalize(&g.name).contains(&query))
+            // The trash tab lists only hidden casinos; the normal list leaves them out.
+            .filter(|g| hidden.contains(&g.slug) == show_hidden)
             .collect();
         if self.picker.by_rating {
             // Stable, so each tier keeps SweepsGrail's order.
@@ -63,7 +70,7 @@ impl App {
                     }
                     // Enter adds the first match that isn't added yet, else the typed name.
                     // Nothing typed: do nothing (it used to add the top casino by accident).
-                    if submitted(ui, &r) && !typed.is_empty() {
+                    if submitted(ui, &r) && !typed.is_empty() && !show_hidden {
                         add = matches
                             .iter()
                             .find(|g| added_id(&g.slug).is_none())
@@ -72,18 +79,41 @@ impl App {
                     }
                     ui.add_space(8.0);
                     let mut sort = usize::from(picker.by_rating);
-                    let w = ui.available_width();
-                    theme::tab_bar(
-                        ui,
-                        "picker_sort",
-                        &mut sort,
-                        &["Default order", "Best rated first"],
-                        w,
-                    )
-                    .on_hover_text("Best rated: SweepsGrail community tier, S, A, B, then C");
+                    ui.horizontal(|ui| {
+                        // Room on the right for the trash tab (wider with a count).
+                        let w = ui.available_width() - 70.0;
+                        theme::tab_bar(
+                            ui,
+                            "picker_sort",
+                            &mut sort,
+                            &["Default order", "Best rated first"],
+                            w,
+                        )
+                        .on_hover_text("Best rated: SweepsGrail community tier, S, A, B, then C");
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(theme::SHADOW);
+                            let icon = theme::NavIcon::Trash;
+                            if theme::icon_button(ui, icon, hidden.len(), picker.show_hidden)
+                                .on_hover_text(if picker.show_hidden {
+                                    "Back to the list"
+                                } else {
+                                    "Casinos you've hidden from this list"
+                                })
+                                .clicked()
+                            {
+                                picker.show_hidden = !picker.show_hidden;
+                            }
+                        });
+                    });
                     picker.by_rating = sort == 1;
                     ui.add_space(8.0);
-                    if !typed.is_empty() && !exact {
+                    if show_hidden {
+                        ui.label(
+                            dim("Hidden casinos. Click one to put it back in the list.").small(),
+                        );
+                        ui.add_space(4.0);
+                    }
+                    if !typed.is_empty() && !exact && !show_hidden {
                         if theme::button(ui, format!("+  Add \"{typed}\" as a custom casino"))
                             .clicked()
                         {
@@ -98,15 +128,31 @@ impl App {
                             for g in &matches {
                                 // Clicking a casino you already have opens it instead of adding it again.
                                 let existing = added_id(&g.slug);
-                                if picker_row(ui, g, existing.is_some()).clicked() {
-                                    match existing {
-                                        Some(id) => open = Some(id),
-                                        None => add = Some(g.name.clone()),
+                                let row = if show_hidden {
+                                    RowKind::Hidden
+                                } else if existing.is_some() {
+                                    RowKind::Added
+                                } else {
+                                    RowKind::Addable
+                                };
+                                let (r, hide_clicked) = picker_row(ui, g, row);
+                                if hide_clicked {
+                                    hide = Some(g.slug.clone());
+                                } else if r.clicked() {
+                                    match (row, existing) {
+                                        (RowKind::Hidden, _) => unhide = Some(g.slug.clone()),
+                                        (_, Some(id)) => open = Some(id),
+                                        (_, None) => add = Some(g.name.clone()),
                                     }
                                 }
                             }
                             if matches.is_empty() && !loading {
-                                ui.label(dim("No SweepsGrail casinos match."));
+                                ui.label(dim(if show_hidden && hidden.is_empty() {
+                                    "Nothing hidden. Point at a casino in the list and click \
+                                     its × to hide it here."
+                                } else {
+                                    "No SweepsGrail casinos match."
+                                }));
                             }
                         });
 
@@ -152,6 +198,21 @@ impl App {
         if refresh {
             self.start_grail_fetch(ctx);
         }
+        if hide.is_some() || unhide.is_some() {
+            let result = self.config.update(|c| {
+                if let Some(slug) = hide {
+                    if !c.hidden_casinos.contains(&slug) {
+                        c.hidden_casinos.push(slug);
+                    }
+                }
+                if let Some(slug) = unhide {
+                    c.hidden_casinos.retain(|s| *s != slug);
+                }
+            });
+            if let Err(e) = result {
+                self.status = Some(format!("Couldn't save the hidden casinos: {e}"));
+            }
+        }
         if let Some(id) = open {
             self.view = View::Casino(id);
             close = true;
@@ -180,8 +241,20 @@ fn tier_rank(tier: &str) -> u8 {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum RowKind {
+    /// Not in your list yet: click adds it; × hides it.
+    Addable,
+    /// Already in your list: click opens it.
+    Added,
+    /// In the trash tab: click puts it back in the list.
+    Hidden,
+}
+
 /// One casino in the "Add casino" dropdown: logo, name, signup bonus and redeem speed, tier.
-fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, added: bool) -> egui::Response {
+/// Returns the row's response and whether its × (hide) was clicked.
+fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, kind: RowKind) -> (egui::Response, bool) {
+    let added = kind != RowKind::Addable;
     let (rect, resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), 46.0), Sense::click());
     let p = ui.painter();
@@ -204,9 +277,18 @@ fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, added: bool) -> egui::Response
         egui::pos2(rect.right() - 18.0, rect.center().y),
         Vec2::splat(24.0),
     );
-    // Text stops short of the tier badge instead of running under it.
+    // × to hide, left of the tier badge; only while the pointer is over the row.
+    let x_rect = egui::Rect::from_center_size(
+        egui::pos2(badge.left() - 18.0, rect.center().y),
+        Vec2::splat(20.0),
+    );
+    // Text stops short of the tier badge (and the ×) instead of running under them.
     let mut text_area = rect;
-    text_area.set_right(badge.left() - 8.0);
+    text_area.set_right(if kind == RowKind::Addable {
+        x_rect.left() - 6.0
+    } else {
+        badge.left() - 8.0
+    });
     let p = &p.with_clip_rect(text_area);
 
     let x = logo.right() + 10.0;
@@ -239,9 +321,9 @@ fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, added: bool) -> egui::Response
         theme::paint_tier(ui.painter(), badge, &g.tier);
     }
     // ADDED / NEW tag sits right after the name, outlined like the casino page's NEW tag.
-    let tag = if added {
+    let tag = if kind == RowKind::Added {
         Some(("ADDED", DIM))
-    } else if g.is_new {
+    } else if g.is_new && kind == RowKind::Addable {
         Some(("NEW", GAIN))
     } else {
         None
@@ -259,13 +341,22 @@ fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, added: bool) -> egui::Response
         p.galley(tag_rect.min + Vec2::new(5.0, 2.0), galley, color);
     }
 
-    let tip = if added {
-        "Already in your list. Click to open it.".to_string()
-    } else if g.welcome_bonus.is_empty() {
-        g.name.clone()
-    } else {
-        g.welcome_bonus.clone()
+    let mut hide = false;
+    if kind == RowKind::Addable && ui.rect_contains_pointer(rect) {
+        let id = ui.id().with(("hide_casino", &g.slug));
+        hide = theme::x_button_at(ui, x_rect, id, LOSS, theme::GRID)
+            .on_hover_text("Hide from this list")
+            .clicked();
+    }
+
+    let tip = match kind {
+        RowKind::Added => "Already in your list. Click to open it.".to_string(),
+        RowKind::Hidden => "Click to put it back in the list.".to_string(),
+        RowKind::Addable if g.welcome_bonus.is_empty() => g.name.clone(),
+        RowKind::Addable => g.welcome_bonus.clone(),
     };
-    resp.on_hover_text(tip)
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
+    let resp = resp
+        .on_hover_text(tip)
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    (resp, hide)
 }

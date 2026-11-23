@@ -4,6 +4,8 @@
 //! - Purchases count in the year they were made.
 //! - Deductible losses (only if itemizing) can't exceed winnings, and from tax year 2026
 //!   only 90% of losses are deductible (2025 tax law).
+//! - Filed as a professional gambler (Schedule C), only the net profit adds to AGI, but it
+//!   owes self-employment tax; as a casual player every redemption adds to AGI.
 
 use crate::model::{parse_cents, Cents, Data, Method};
 use chrono::{Datelike, NaiveDate};
@@ -112,6 +114,34 @@ impl TaxSummary {
     /// never more than the year's redemptions.
     pub fn deductible_losses(&self) -> Cents {
         (self.purchases * self.loss_percent() / 100).min(self.redeemed)
+    }
+
+    /// What a casual player adds to AGI: every redemption received. Losses only come off
+    /// later, as an itemized deduction.
+    pub fn casual_agi(&self) -> Cents {
+        self.redeemed
+    }
+
+    /// Schedule C net profit for a professional gambler: redemptions minus purchases and
+    /// fees (at `loss_percent`), never below zero since losses are capped at winnings.
+    pub fn schedule_c_profit(&self) -> Cents {
+        let costs = (self.purchases + self.fees) * self.loss_percent() / 100;
+        self.redeemed - costs.min(self.redeemed)
+    }
+
+    /// Estimated self-employment tax on the Schedule C profit: 15.3% of 92.35% of it, none
+    /// under $400. Ignores the Social Security wage cap (far above typical profits).
+    pub fn self_employment_tax(&self) -> Cents {
+        let profit = self.schedule_c_profit();
+        if profit < 40_000 {
+            return 0;
+        }
+        (profit as f64 * 0.9235 * 0.153).round() as Cents
+    }
+
+    /// What Schedule C adds to AGI: the profit, less the deductible half of the SE tax.
+    pub fn schedule_c_agi(&self) -> Cents {
+        self.schedule_c_profit() - self.self_employment_tax() / 2
     }
 }
 
@@ -338,6 +368,37 @@ mod tests {
         // Can't deduct more than winnings (none in 2025); 100% rule before 2026.
         assert_eq!(s2025.loss_percent(), 100);
         assert_eq!(s2025.deductible_losses(), 0);
+    }
+
+    #[test]
+    fn compares_casual_and_schedule_c() {
+        let s = |redeemed, purchases, fees| TaxSummary {
+            year: 2026,
+            redeemed,
+            purchases,
+            fees,
+            ..Default::default()
+        };
+        // $60k redeemed, $50k spent: casual adds all $60k; Schedule C deducts 90% of the
+        // $50k, leaving $15k profit.
+        let big = s(6_000_000, 5_000_000, 0);
+        assert_eq!(big.casual_agi(), 6_000_000);
+        assert_eq!(big.schedule_c_profit(), 1_500_000);
+        assert_eq!(big.self_employment_tax(), 211_943); // 15,000 * 0.9235 * 0.153
+        assert_eq!(big.schedule_c_agi(), 1_500_000 - 105_971);
+        // Fees count as costs too.
+        assert_eq!(s(6_000_000, 5_000_000, 100_000).schedule_c_profit(), 1_410_000);
+        // Losses can't push the profit below zero.
+        let loss = s(1_000_000, 5_000_000, 0);
+        assert_eq!(loss.schedule_c_profit(), 0);
+        assert_eq!(loss.self_employment_tax(), 0);
+        // No SE tax under $400 of profit.
+        assert_eq!(s(39_999, 0, 0).self_employment_tax(), 0);
+        assert!(s(40_000, 0, 0).self_employment_tax() > 0);
+        // Before 2026 all costs count.
+        let mut old = s(6_000_000, 5_000_000, 0);
+        old.year = 2025;
+        assert_eq!(old.schedule_c_profit(), 1_000_000);
     }
 
     #[test]

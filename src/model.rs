@@ -487,10 +487,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         })
 }
 
-/// Remembers recently opened project folders (most recent first).
+/// App settings: recently opened project folders (most recent first) and SweepsGrail
+/// casinos hidden from the "Add casino" list.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     pub recent: Vec<PathBuf>,
+    /// SweepsGrail slugs. Missing in older config files, hence the default.
+    #[serde(default)]
+    pub hidden_casinos: Vec<String>,
 }
 
 impl Config {
@@ -719,6 +723,13 @@ mod tests {
         // Latest by date, not by entry order.
         assert_eq!(casino.last_daily_sc(), Some(30));
         assert_eq!(casino.daily_days().len(), 2);
+    }
+
+    #[test]
+    fn reads_config_saved_before_hidden_casinos() {
+        let old: Config = serde_json::from_str(r#"{"recent": ["/a"]}"#).unwrap();
+        assert_eq!(old.recent, vec![PathBuf::from("/a")]);
+        assert!(old.hidden_casinos.is_empty());
     }
 
     #[test]

@@ -466,8 +466,7 @@ pub fn control_height(ui: &egui::Ui) -> f32 {
 
 /// Dropdown button drawn at exactly `width` (egui's ComboBox doesn't keep to a given width):
 /// white with a 2px border, hard shadow that presses in, value on the left and ▾ on the right.
-pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
-    let height = control_height(ui);
+pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32, height: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     let offset = if resp.is_pointer_button_down_on() {
         1.0
@@ -506,6 +505,29 @@ pub fn select_button(ui: &mut egui::Ui, text: &str, width: f32) -> Response {
 /// renders as an empty box). `color` is the X; `frame` the border and hard shadow.
 pub fn x_button(ui: &mut egui::Ui, color: Color32, frame: Color32, size: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    paint_x_button(ui, rect, resp, color, frame)
+}
+
+/// `x_button` at a given spot, on top of whatever is there (e.g. inside a clickable row).
+pub fn x_button_at(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    id: egui::Id,
+    color: Color32,
+    frame: Color32,
+) -> Response {
+    let resp = ui.interact(rect, id, Sense::click());
+    paint_x_button(ui, rect, resp, color, frame)
+}
+
+fn paint_x_button(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    resp: Response,
+    color: Color32,
+    frame: Color32,
+) -> Response {
+    let size = rect.width();
     let offset = if resp.is_pointer_button_down_on() {
         1.0
     } else if resp.hovered() {
@@ -522,6 +544,58 @@ pub fn x_button(ui: &mut egui::Ui, color: Color32, frame: Color32, size: f32) ->
     let stroke = Stroke::new(2.0_f32, color);
     p.line_segment([c + Vec2::new(-r, -r), c + Vec2::new(r, r)], stroke);
     p.line_segment([c + Vec2::new(-r, r), c + Vec2::new(r, -r)], stroke);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Square shadowed button with a nav icon and an optional count beside it (e.g. the
+/// "Add casino" list's hidden-casinos tab). Filled primary while `selected`.
+pub fn icon_button(
+    ui: &mut egui::Ui,
+    icon: NavIcon,
+    count: usize,
+    selected: bool,
+) -> Response {
+    let font = FontId::new(13.0, bold());
+    let label = (count > 0).then(|| count.to_string());
+    let text_w = label.as_ref().map_or(0.0, |t| {
+        ui.painter()
+            .layout_no_wrap(t.clone(), font.clone(), PRIMARY)
+            .size()
+            .x
+            + 6.0
+    });
+    let size = Vec2::new(30.0 + text_w, 28.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let offset = if resp.is_pointer_button_down_on() {
+        1.0
+    } else if resp.hovered() {
+        2.0
+    } else {
+        3.0
+    };
+    let (fill, fg) = match (selected, resp.hovered()) {
+        (true, _) => (PRIMARY, BG),
+        (false, true) => (STRIPE, PRIMARY),
+        (false, false) => (BG, PRIMARY),
+    };
+    let p = ui.painter();
+    p.rect_filled(rect.translate(Vec2::splat(offset)), 0.0, PRIMARY);
+    p.rect_filled(rect, 0.0, fill);
+    p.rect_stroke(rect.shrink(BORDER / 2.0), 0.0, Stroke::new(BORDER, PRIMARY));
+    let icon_rect = Rect::from_center_size(
+        egui::pos2(rect.left() + 15.0, rect.center().y),
+        Vec2::splat(14.0),
+    );
+    paint_nav_icon(p, icon, icon_rect, fg);
+    if let Some(t) = label {
+        p.text(
+            egui::pos2(icon_rect.right() + 6.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            t,
+            font,
+            fg,
+        );
+    }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

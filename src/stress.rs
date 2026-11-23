@@ -1107,6 +1107,7 @@ fn child_process() {
             let pid = std::process::id();
             let config = Config {
                 recent: (0..len).map(|i| PathBuf::from(format!("/{pid}/{i}"))).collect(),
+                ..Default::default()
             };
             for _ in 0..2_000 {
                 config.save().unwrap();
