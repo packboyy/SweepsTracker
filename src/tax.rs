@@ -272,7 +272,6 @@ mod tests {
             casinos: vec![Casino {
                 id: 1,
                 name: "Modo".into(),
-                min_age: None,
                 purchases: vec![
                     Purchase {
                         id: 1,

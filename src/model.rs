@@ -6,7 +6,7 @@
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -155,8 +155,6 @@ pub struct FreeCoins {
 pub struct Casino {
     pub id: i64,
     pub name: String,
-    /// Minimum age to play (18 or 21), set by the user; None until chosen.
-    pub min_age: Option<u8>,
     pub purchases: Vec<Purchase>,
     pub redemptions: Vec<Redemption>,
     pub free_coins: Vec<FreeCoins>,
@@ -172,6 +170,51 @@ impl Casino {
     pub fn entry_count(&self) -> usize {
         self.purchases.len() + self.redemptions.len() + self.free_coins.len()
     }
+
+    /// Days with a daily login bonus logged.
+    pub fn daily_days(&self) -> BTreeSet<NaiveDate> {
+        self.free_coins
+            .iter()
+            .filter(|f| f.source == Source::Daily)
+            .map(|f| f.date)
+            .collect()
+    }
+
+    /// Whether dailies are claimed here at all (any daily login bonus logged).
+    pub fn tracks_dailies(&self) -> bool {
+        self.free_coins.iter().any(|f| f.source == Source::Daily)
+    }
+
+    /// The amount of the most recent daily login bonus, which Claim logs again.
+    pub fn last_daily_sc(&self) -> Option<Cents> {
+        self.free_coins
+            .iter()
+            .filter(|f| f.source == Source::Daily && f.sc > 0)
+            .max_by_key(|f| (f.date, f.id))
+            .map(|f| f.sc)
+    }
+}
+
+/// Consecutive days with a daily claimed, ending today. A streak isn't broken until a whole
+/// day is missed, so one that ran through yesterday still counts while today is unclaimed.
+pub fn streak(days: &BTreeSet<NaiveDate>, today: NaiveDate) -> u32 {
+    let mut day = if days.contains(&today) {
+        today
+    } else {
+        match today.pred_opt() {
+            Some(d) => d,
+            None => return 0,
+        }
+    };
+    let mut count = 0;
+    while days.contains(&day) {
+        count += 1;
+        match day.pred_opt() {
+            Some(d) => day = d,
+            None => break,
+        }
+    }
+    count
 }
 
 /// Everything in the open project (casinos sorted by name, deleted rows excluded).
@@ -197,6 +240,11 @@ impl Data {
             s.add(c);
         }
         s
+    }
+
+    /// Days with a daily claimed at any casino.
+    pub fn daily_days(&self) -> BTreeSet<NaiveDate> {
+        self.casinos.iter().flat_map(|c| c.daily_days()).collect()
     }
 
     /// Net (redeemed - spent) per day across all casinos, for the profit chart.
@@ -592,7 +640,6 @@ mod tests {
         let casino = Casino {
             id: 1,
             name: "Modo".into(),
-            min_age: None,
             purchases: vec![Purchase {
                 id: 1,
                 date: d,
@@ -627,6 +674,51 @@ mod tests {
             casinos: vec![casino],
         };
         assert_eq!(data.daily_net()[&d], 19000);
+    }
+
+    #[test]
+    fn counts_streaks() {
+        let today = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(); // after Feb 28
+        let day = |n: i64| today - chrono::Duration::days(n);
+        let set = |ns: &[i64]| ns.iter().map(|&n| day(n)).collect::<BTreeSet<_>>();
+        assert_eq!(streak(&set(&[]), today), 0);
+        assert_eq!(streak(&set(&[0]), today), 1);
+        assert_eq!(streak(&set(&[0, 1, 2]), today), 3);
+        // Today not claimed yet: yesterday's streak is still alive.
+        assert_eq!(streak(&set(&[1, 2]), today), 2);
+        // A missed day ends it.
+        assert_eq!(streak(&set(&[2, 3]), today), 0);
+        assert_eq!(streak(&set(&[0, 2, 3]), today), 1);
+        // Future-dated entries don't count.
+        assert_eq!(streak(&set(&[-1]), today), 0);
+    }
+
+    #[test]
+    fn daily_helpers() {
+        let d = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let free = |id, date, sc, source| FreeCoins {
+            id,
+            date,
+            sc,
+            source,
+            note: String::new(),
+        };
+        let mut casino = Casino {
+            id: 1,
+            name: "A".into(),
+            purchases: vec![],
+            redemptions: vec![],
+            free_coins: vec![free(1, d, 500, Source::Promo)],
+        };
+        assert!(!casino.tracks_dailies());
+        assert_eq!(casino.last_daily_sc(), None);
+        let next = d.succ_opt().unwrap();
+        casino.free_coins.push(free(2, next, 30, Source::Daily));
+        casino.free_coins.push(free(3, d, 100, Source::Daily));
+        assert!(casino.tracks_dailies());
+        // Latest by date, not by entry order.
+        assert_eq!(casino.last_daily_sc(), Some(30));
+        assert_eq!(casino.daily_days().len(), 2);
     }
 
     #[test]

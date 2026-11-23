@@ -292,7 +292,6 @@ fn csv_export_neutralizes_formulas() {
         casinos: vec![Casino {
             id: 1,
             name: "@evil".into(),
-            min_age: None,
             purchases: vec![Purchase {
                 id: 1,
                 date,
@@ -923,7 +922,6 @@ fn two_digit_years_are_this_century() {
         casinos: vec![Casino {
             id: 1,
             name: "A".into(),
-            min_age: None,
             purchases: vec![Purchase {
                 id: 1,
                 date: rows[0].date,
@@ -983,22 +981,6 @@ fn a_tiny_markup_is_not_minus_zero_percent() {
     assert_eq!(percent(-0.001), "-0.1%");
     assert_eq!(percent(0.0), "0%");
     assert_eq!(percent(1.0), "100%");
-}
-
-#[test]
-fn minimum_age_is_saved_and_survives_delete_and_restore() {
-    let mut s = Store::in_memory();
-    let id = s.add_casino("Modo").unwrap();
-    assert_eq!(s.load().unwrap().casinos[0].min_age, None);
-    s.set_min_age(id, Some(21)).unwrap();
-    assert_eq!(s.load().unwrap().casinos[0].min_age, Some(21));
-    s.delete_casino(id).unwrap();
-    s.restore_casino(id).unwrap();
-    assert_eq!(s.load().unwrap().casinos[0].min_age, Some(21));
-    s.set_min_age(id, None).unwrap();
-    assert_eq!(s.load().unwrap().casinos[0].min_age, None);
-    // Only 18 and 21 are allowed.
-    assert!(s.set_min_age(id, Some(19)).is_err());
 }
 
 // ---- Round 4: quitting, crashing and reopening ----
@@ -1583,7 +1565,6 @@ fn tax_csv_reads_back_exactly_and_matches_the_taxes_page() {
             let mut c = Casino {
                 id,
                 name: format!("{}{id}", text()),
-                min_age: None,
                 purchases: vec![],
                 redemptions: vec![],
                 free_coins: vec![],

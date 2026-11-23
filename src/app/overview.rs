@@ -12,12 +12,10 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 theme::section(ui, "Profit over time");
-                ui.add_space(4.0);
                 profit_chart(ui, &self.cache.daily_net);
                 ui.add_space(20.0);
 
                 theme::section(ui, "By casino");
-                ui.add_space(4.0);
                 let mut rows: Vec<(i64, &str, Stats, usize)> = self
                     .data
                     .casinos
@@ -29,7 +27,7 @@ impl App {
                 // Flush grid with equal-width columns, so it always fits the box (a Grid with
                 // minimum column widths ran off the right edge in narrow windows).
                 let mut open = None;
-                let pad = Vec2::new(10.0, 6.0);
+                let pad = Vec2::new(10.0, 4.0);
                 theme::boxed_flush(ui, |ui| {
                     let headers = [
                         "CASINO",
@@ -109,7 +107,7 @@ impl App {
 /// Line chart of cumulative net profit (redeemed - spent) by day. Values are cents.
 fn profit_chart(ui: &mut egui::Ui, by_day: &BTreeMap<NaiveDate, Cents>) {
     let (resp, painter) = ui.allocate_painter(
-        Vec2::new(ui.available_width() - theme::SHADOW, 200.0),
+        Vec2::new(ui.available_width() - theme::SHADOW, 170.0),
         Sense::hover(),
     );
     let rect = resp.rect;
@@ -146,7 +144,7 @@ fn profit_chart(ui: &mut egui::Ui, by_day: &BTreeMap<NaiveDate, Cents>) {
     let max = points.iter().map(|p| p.1).max().unwrap_or(0).max(0) as f32;
     let range = (max - min).max(1.0);
 
-    let plot = rect.shrink2(Vec2::new(64.0, 22.0));
+    let plot = rect.shrink2(Vec2::new(64.0, 18.0));
     let to_screen = |d: NaiveDate, v: Cents| {
         let x = plot.left() + plot.width() * (d - first).num_days() as f32 / span;
         let y = plot.bottom() - plot.height() * (v as f32 - min) / range;

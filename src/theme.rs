@@ -261,15 +261,18 @@ pub fn underline(ui: &mut egui::Ui) {
 
 /// Section title with a rule under it.
 pub fn section(ui: &mut egui::Ui, title: &str) {
-    ui.label(
-        egui::RichText::new(title.to_uppercase())
-            .family(bold())
-            .size(14.0)
-            .color(PRIMARY),
-    );
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), BORDER), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, PRIMARY);
-    ui.add_space(4.0);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 3.0;
+        ui.label(
+            egui::RichText::new(title.to_uppercase())
+                .family(bold())
+                .size(14.0)
+                .color(PRIMARY),
+        );
+        let (rect, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), BORDER), Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, PRIMARY);
+    });
 }
 
 /// Tab labels over the underline bar; the primary segment slides to the selected tab.
@@ -306,14 +309,14 @@ pub fn tab_bar(
 
 /// Sidebar row drawn as a button: bold text, 2px border, hard shadow that presses in on
 /// hover/click, and a ▸ arrow. The selected row is filled primary with white text.
-/// An optional logo URL is drawn before the text, and an optional badge (e.g. "21+") after it.
+/// An optional logo URL is drawn before the text.
 pub fn list_item(
     ui: &mut egui::Ui,
     text: &str,
     selected: bool,
     logo_url: Option<&str>,
-    badge: Option<&str>,
     trailing: Option<(String, Color32)>,
+    daily: Option<bool>,
 ) -> Response {
     let font = FontId::new(15.0, bold());
     // Leave room on the right for the shadow so it isn't clipped by the panel.
@@ -348,16 +351,13 @@ pub fn list_item(
         logo_at(ui, url, logo_rect);
         x += size + 8.0;
     }
-    let text_rect = p.text(
+    p.text(
         egui::pos2(x, rect.center().y),
         Align2::LEFT_CENTER,
         text,
         font,
         text_color,
     );
-    if let Some(badge) = badge {
-        paint_badge(ui, egui::pos2(text_rect.right() + 6.0, rect.center().y), badge, text_color);
-    }
 
     // ▸ arrow at the right edge.
     let arrow_x = rect.right() - 12.0;
@@ -371,17 +371,44 @@ pub fn list_item(
         text_color,
         Stroke::NONE,
     ));
+    let mut right = arrow_x - 12.0;
     if let Some((s, c)) = trailing {
         let small = TextStyle::Small.resolve(ui.style());
         let color = if selected { BG } else { c };
-        p.text(
-            egui::pos2(arrow_x - 12.0, rect.center().y),
+        let r = p.text(
+            egui::pos2(right, rect.center().y),
             Align2::RIGHT_CENTER,
             s,
             small,
             color,
         );
+        right = r.left() - 8.0;
     }
+    // Daily marker: a hollow square until today's daily is logged, then a filled one.
+    if let Some(claimed) = daily {
+        let square =
+            Rect::from_center_size(egui::pos2(right - 4.0, rect.center().y), Vec2::splat(9.0));
+        let color = match (selected, claimed) {
+            (true, _) => BG,
+            (false, true) => GAIN,
+            (false, false) => PRIMARY,
+        };
+        if claimed {
+            p.rect_filled(square, 0.0, color);
+        } else {
+            p.rect_stroke(square.shrink(0.75), 0.0, Stroke::new(1.5_f32, color));
+        }
+    }
+    let hint = match daily {
+        Some(true) => "Daily claimed today",
+        Some(false) => "Daily not claimed yet today",
+        None => "",
+    };
+    let resp = if hint.is_empty() {
+        resp
+    } else {
+        resp.on_hover_text(hint)
+    };
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -695,22 +722,6 @@ pub fn paint_tier(p: &egui::Painter, rect: Rect, tier: &str) {
     );
 }
 
-/// Small outlined badge (e.g. "21+") painted with its left edge at `left_center`.
-fn paint_badge(ui: &egui::Ui, left_center: egui::Pos2, text: &str, color: Color32) {
-    let galley = ui.painter().layout_no_wrap(
-        text.to_string(),
-        FontId::new(11.0, bold()),
-        color,
-    );
-    let rect = Rect::from_min_size(
-        egui::pos2(left_center.x, left_center.y - galley.size().y / 2.0 - 1.0),
-        galley.size() + Vec2::new(8.0, 2.0),
-    );
-    let p = ui.painter();
-    p.rect_stroke(rect.shrink(0.5), 0.0, Stroke::new(1.0_f32, color));
-    p.galley(rect.min + Vec2::new(4.0, 1.0), galley, color);
-}
-
 /// Small outlined tag, e.g. "NEW".
 pub fn tag(ui: &mut egui::Ui, text: &str, color: Color32) {
     egui::Frame::none()
@@ -723,6 +734,58 @@ pub fn tag(ui: &mut egui::Ui, text: &str, color: Color32) {
 
 /// Thin grid lines between info tiles.
 pub const GRID: Color32 = Color32::from_rgb(0xb9, 0xbc, 0xf5);
+
+/// Hover breakdown: labels on the left, amounts right-aligned, and an optional total under a
+/// rule. Padded itself, since popups share the dropdowns' thin margin.
+pub fn breakdown_tooltip(
+    ui: &mut egui::Ui,
+    rows: &[(String, String)],
+    total: Option<(&str, String)>,
+) {
+    egui::Frame::none()
+        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            let row = |ui: &mut egui::Ui, label: &str, value: &str, strong: bool| {
+                let font = if strong {
+                    bold()
+                } else {
+                    egui::FontFamily::Proportional
+                };
+                ui.label(
+                    egui::RichText::new(label)
+                        .small()
+                        .family(font.clone())
+                        .color(if strong { PRIMARY } else { DIM }),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(value).family(font).color(PRIMARY));
+                });
+                ui.end_row();
+            };
+            egui::Grid::new("breakdown")
+                .num_columns(2)
+                .min_col_width(70.0)
+                .spacing([24.0, 4.0])
+                .show(ui, |ui| {
+                    for (label, value) in rows {
+                        row(ui, label, value, false);
+                    }
+                });
+            if let Some((label, value)) = total {
+                let (rect, _) =
+                    ui.allocate_exact_size(Vec2::new(ui.min_rect().width(), 1.0), Sense::hover());
+                ui.painter().rect_filled(rect, 0.0, GRID);
+                egui::Grid::new("breakdown_total")
+                    .num_columns(2)
+                    .min_col_width(70.0)
+                    .spacing([24.0, 4.0])
+                    .show(ui, |ui| {
+                        row(ui, label, &value, true);
+                    });
+            }
+        });
+}
 
 /// Like `boxed`, but with no inner padding: content runs right up to the 2px border.
 pub fn boxed_flush<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {

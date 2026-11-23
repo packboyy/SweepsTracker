@@ -99,6 +99,10 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE casinos ADD COLUMN min_age INTEGER CHECK (min_age IN (18, 21));
     ",
+    // 4: the minimum age was removed from the app
+    "
+    ALTER TABLE casinos DROP COLUMN min_age;
+    ",
 ];
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
@@ -306,13 +310,12 @@ impl Store {
     pub fn load(&self) -> Result<Data, String> {
         let mut casinos: Vec<Casino> = self
             .conn
-            .prepare("SELECT id, name, min_age FROM casinos WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE")
+            .prepare("SELECT id, name FROM casinos WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE")
             .map_err(err)?
             .query_map([], |r| {
                 Ok(Casino {
                     id: r.get(0)?,
                     name: r.get(1)?,
-                    min_age: r.get(2)?,
                     purchases: Vec::new(),
                     redemptions: Vec::new(),
                     free_coins: Vec::new(),
@@ -428,17 +431,6 @@ impl Store {
             .execute(
                 &format!("UPDATE casinos SET name = ?2, updated_at = {NOW} WHERE id = ?1"),
                 params![id, name],
-            )
-            .map(|_| ())
-            .map_err(err)
-    }
-
-    /// Sets (or clears, with None) the casino's minimum age: 18 or 21.
-    pub fn set_min_age(&self, id: i64, min_age: Option<u8>) -> Result<(), String> {
-        self.conn
-            .execute(
-                &format!("UPDATE casinos SET min_age = ?2, updated_at = {NOW} WHERE id = ?1"),
-                params![id, min_age],
             )
             .map(|_| ())
             .map_err(err)

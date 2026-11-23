@@ -270,8 +270,12 @@ fn choice<T: Copy + PartialEq, S: Into<String>>(
 }
 
 /// "18+" / "21+"
-fn age_label(min_age: u8) -> String {
-    format!("{min_age}+")
+fn streak_text(days: u32) -> String {
+    if days == 1 {
+        "1-day streak".into()
+    } else {
+        format!("{days}-day streak")
+    }
 }
 
 fn status_label(received: bool) -> &'static str {
@@ -284,6 +288,8 @@ fn status_label(received: bool) -> &'static str {
 
 /// Padding inside the flush grid cells of the totals and entry boxes.
 const CELL_PAD: Vec2 = Vec2::new(12.0, 8.0);
+/// Tighter padding for the totals grid.
+const STAT_PAD: Vec2 = Vec2::new(12.0, 5.0);
 
 /// Width that fills the cell, leaving a little room for the focus glow / button shadow.
 fn fill_width(ui: &egui::Ui) -> f32 {
@@ -317,10 +323,12 @@ fn stat_cell(
     value: String,
     detail: Option<String>,
     color: Color32,
+    hover: Option<Vec<(String, String)>>,
 ) {
     let tint = (color == GAIN || color == LOSS).then(|| color.gamma_multiply(0.1));
-    theme::grid_cell(ui, first_col, true, tint, CELL_PAD, |ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(6.0, 2.0);
+    let total = value.clone();
+    let cell = theme::grid_cell(ui, first_col, true, tint, STAT_PAD, |ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
         ui.label(dim(title).small());
         // Detail (e.g. "+15 bonus") sits beside the value so every cell is one height.
         ui.horizontal(|ui| {
@@ -336,6 +344,11 @@ fn stat_cell(
             }
         });
     });
+    if let Some(rows) = hover {
+        cell.response.on_hover_ui(|ui| {
+            theme::breakdown_tooltip(ui, &rows, Some(("Total", total)));
+        });
+    }
 }
 
 /// Totals as one flush grid box (same style as the SweepsGrail details), with a
@@ -349,13 +362,13 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
             // Small notes beside the values: discount bonus and free SC by the coins,
             // pending payouts and fees by the withdrawals.
             let join = |parts: Vec<String>| (!parts.is_empty()).then(|| parts.join(" · "));
-            let mut coin_notes = Vec::new();
+            // Coins: bought + free in one total, with the breakdown on hover.
+            let mut coin_rows = vec![("Bought".to_string(), coins(stats.cc_received))];
             if stats.bonus_coins() > 0 {
-                coin_notes.push(format!("+{} bonus", coins(stats.bonus_coins())));
+                let bonus = format!("+{}", coins(stats.bonus_coins()));
+                coin_rows.push(("  incl. bonus over spend".to_string(), bonus));
             }
-            if stats.free_sc > 0 {
-                coin_notes.push(format!("{} free SC", coins(stats.free_sc)));
-            }
+            coin_rows.push(("Free SC".to_string(), coins(stats.free_sc)));
             let mut payout_notes = Vec::new();
             if stats.pending > 0 {
                 payout_notes.push(format!("{} pending", money(stats.pending)));
@@ -370,14 +383,16 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
                 money(stats.spent),
                 None,
                 PRIMARY,
+                None,
             );
             stat_cell(
                 &mut cols[1],
                 false,
-                "CC RECEIVED",
-                coins(stats.cc_received),
-                join(coin_notes),
+                "TOTAL COINS",
+                coins(stats.cc_received + stats.free_sc),
+                None,
                 PRIMARY,
+                Some(coin_rows),
             );
             stat_cell(
                 &mut cols[2],
@@ -386,6 +401,7 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
                 money(stats.withdrawn),
                 join(payout_notes),
                 PRIMARY,
+                None,
             );
             stat_cell(
                 &mut cols[3],
@@ -394,13 +410,16 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
                 signed_money(stats.net()),
                 None,
                 profit_color(stats.net()),
+                None,
             );
         });
         // How much of what was spent has come back out, drawn like a playback progress bar.
         if stats.spent > 0 {
             let recovered = stats.withdrawn as f64 / stats.spent as f64;
-            theme::grid_cell(ui, true, false, None, CELL_PAD, |ui| {
+            theme::grid_cell(ui, true, false, None, STAT_PAD, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
+                // Rows default to button height, which left a gap above the bar.
+                ui.spacing_mut().interact_size.y = 0.0;
                 ui.horizontal(|ui| {
                     ui.label(dim("RECOVERED").small());
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -408,6 +427,7 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
                     });
                 });
                 theme::progress(ui, recovered as f32);
+                ui.add_space(3.0); // the bar's shadow
             });
         }
     });
@@ -838,6 +858,12 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_grail();
         self.poll_update();
+        // Redraw at midnight so "claimed today" resets even if the app sits idle.
+        let now = Local::now().naive_local();
+        if let Some(midnight) = now.date().succ_opt().and_then(|d| d.and_hms_opt(0, 0, 1)) {
+            let wait = (midnight - now).to_std().unwrap_or_default();
+            ctx.request_repaint_after(wait);
+        }
         #[cfg(target_os = "macos")]
         {
             let on_casino = matches!(self.view, View::Casino(_)) && self.project.is_some();

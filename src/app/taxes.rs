@@ -191,6 +191,18 @@ fn deductible(ui: &mut egui::Ui, s: &TaxSummary) {
                 money(s.redeemed),
             )));
         });
+        // The figure above is for casual players; mention the other way it can be filed.
+        theme::grid_cell(ui, true, false, Some(theme::STRIPE), CELL_PAD, |ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.label(dim("IF GAMBLING IS YOUR BUSINESS").small());
+            ui.label(dim(
+                "Someone who gambles full-time as their livelihood may qualify as a professional \
+                 gambler and file on Schedule C instead. Losses are then deducted without \
+                 itemizing (still capped at winnings), but the profit owes self-employment tax \
+                 (about 15.3%). The IRS decides this on the facts, and a side hobby usually \
+                 doesn't qualify, so ask a tax professional first.",
+            ));
+        });
     });
     ui.add_space(theme::SHADOW);
 }

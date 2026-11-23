@@ -14,8 +14,6 @@ impl App {
         // logo, name and tier then fill what's left, and a long name truncates instead of
         // running under the buttons.
         let header = Vec2::new(ui.available_width(), 44.0);
-        // Saved after the header is drawn (the casino is borrowed while it's drawn).
-        let mut min_age = casino.min_age;
         ui.allocate_ui_with_layout(header, Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(theme::SHADOW);
             if theme::colored_button(ui, "Delete", LOSS, false)
@@ -33,16 +31,6 @@ impl App {
             {
                 self.pasting = Some((id, String::new(), Vec::new()));
             }
-            let age_text = |age: Option<u8>| age.map_or("Age: ?".to_string(), age_label);
-            choice(
-                ui,
-                "min_age",
-                &mut min_age,
-                &[None, Some(18), Some(21)],
-                age_text,
-                84.0,
-            )
-            .on_hover_text("Minimum age to play here");
             if let Some(g) = info.filter(|g| !g.review_url.is_empty()) {
                 if theme::button(ui, "Review")
                     .on_hover_text("Open the full review on SweepsGrail")
@@ -55,9 +43,8 @@ impl App {
                 if let Some(g) = info {
                     theme::logo(ui, &g.logo, 40.0);
                 }
-                // Keep room for the age, tier badge and NEW tag after the name.
-                let reserve = if info.is_some() { 90.0 } else { 0.0 }
-                    + if casino.min_age.is_some() { 44.0 } else { 0.0 };
+                // Keep room for the tier badge and NEW tag after the name.
+                let reserve = if info.is_some() { 90.0 } else { 0.0 };
                 ui.scope(|ui| {
                     ui.set_max_width((ui.available_width() - reserve).max(60.0));
                     ui.add(
@@ -67,9 +54,6 @@ impl App {
                         .truncate(),
                     );
                 });
-                if let Some(age) = casino.min_age {
-                    theme::tag(ui, &age_label(age), PRIMARY);
-                }
                 if let Some(g) = info {
                     if !g.tier.is_empty() {
                         theme::tier_badge(ui, &g.tier, 26.0);
@@ -82,13 +66,6 @@ impl App {
         });
         theme::underline(ui);
         ui.add_space(10.0);
-        if min_age != casino.min_age {
-            let result = self.db().set_min_age(id, min_age);
-            self.apply(result);
-            // The rest of the page is drawn next frame, from the reloaded data.
-            ui.ctx().request_repaint();
-            return;
-        }
         if let Some(g) = info {
             grail_info(ui, g);
             ui.add_space(8.0);
@@ -96,9 +73,92 @@ impl App {
         stats_row(ui, self.stats_of(id));
         ui.add_space(10.0);
 
+        self.daily_row(ui, id);
+        ui.add_space(10.0);
         self.add_entry_form(ui, id);
         ui.add_space(10.0);
         self.entries_table(ui, id);
+    }
+
+    /// Today's daily login bonus: whether it's logged, the streak, and a one-click Claim that
+    /// logs the same amount as last time.
+    fn daily_row(&mut self, ui: &mut egui::Ui, id: i64) {
+        let Some(casino) = self.data.casino(id) else {
+            return;
+        };
+        let today = today();
+        let days = casino.daily_days();
+        let claimed = days.contains(&today);
+        let streak = streak(&days, today);
+        let last = casino.last_daily_sc();
+        let mut claim = false;
+        theme::boxed_flush(ui, |ui| {
+            theme::grid_cell(ui, true, true, None, Vec2::new(CELL_PAD.x, 6.0), |ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(10.0, 0.0);
+                // Button first (from the right) like the page header, then everything else
+                // centred on the same line.
+                let row = Vec2::new(ui.available_width(), 32.0);
+                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_space(theme::SHADOW);
+                    if !claimed {
+                        let (text, hint) = match last {
+                            Some(sc) => (
+                                format!("Claim {} SC", coins(sc)),
+                                "Log today's daily login bonus (same amount as last time)",
+                            ),
+                            None => ("Claim daily".to_string(), "Log today's daily login bonus"),
+                        };
+                        claim = theme::colored_button(ui, &text, PRIMARY, true)
+                            .on_hover_text(hint)
+                            .clicked();
+                    }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.label(dim("DAILY LOGIN").small());
+                        let (status, color) = if claimed {
+                            ("Claimed today", GAIN)
+                        } else if days.is_empty() {
+                            ("Not tracked yet", DIM)
+                        } else {
+                            ("Not claimed yet today", PRIMARY)
+                        };
+                        ui.label(RichText::new(status).family(theme::bold()).color(color));
+                        if streak > 0 {
+                            let color = if claimed { GAIN } else { PRIMARY };
+                            theme::tag(ui, &streak_text(streak), color);
+                            if !claimed {
+                                ui.add(
+                                    egui::Label::new(dim("claim today to keep it going").small())
+                                        .truncate(),
+                                );
+                            }
+                        }
+                    });
+                });
+            });
+        });
+        ui.add_space(theme::SHADOW);
+        if !claim {
+            return;
+        }
+        match last {
+            Some(sc) => {
+                let result = self.db().add_free_coins(id, today, sc, Source::Daily, "");
+                self.apply(result);
+            }
+            // First claim here: the amount isn't known yet, so fill in the form instead.
+            None => {
+                let f = &mut self.form;
+                f.kind = Kind::FreeSc;
+                f.source = Source::Daily;
+                f.date = today;
+                f.focus_first = true;
+                self.status = Some(
+                    "Enter how many SC today's daily gave you. Next time, Claim logs the same \
+                     amount in one click."
+                        .into(),
+                );
+            }
+        }
     }
 
     fn add_entry_form(&mut self, ui: &mut egui::Ui, casino_id: i64) {

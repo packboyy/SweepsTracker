@@ -21,6 +21,31 @@ impl App {
         }
         ui.add_space(12.0);
         theme::section(ui, "Casinos");
+        // Today's dailies and the streak across all casinos, once any daily is logged.
+        let today = today();
+        let tracked = self.data.casinos.iter().filter(|c| c.tracks_dailies());
+        let (mut claimed, mut total) = (0, 0);
+        for casino in tracked {
+            total += 1;
+            claimed += casino.daily_days().contains(&today) as usize;
+        }
+        if total > 0 {
+            let streak = streak(&self.data.daily_days(), today);
+            ui.horizontal(|ui| {
+                let color = if claimed == total { GAIN } else { PRIMARY };
+                ui.label(
+                    RichText::new(format!("DAILIES {claimed}/{total}"))
+                        .small()
+                        .family(theme::bold())
+                        .color(color),
+                )
+                .on_hover_text("Casinos with today's daily login bonus logged");
+                if streak > 0 {
+                    ui.label(dim(streak_text(streak)).small())
+                        .on_hover_text("Days in a row with at least one daily claimed");
+                }
+            });
+        }
 
         let full = Vec2::new(ui.available_width() - theme::SHADOW, 0.0);
         let r = theme::shadowed(ui, |ui| {
@@ -65,10 +90,18 @@ impl App {
                             .cache
                             .listing(&self.grail, casino.id)
                             .map(|g| g.logo.as_str());
-                        let age = casino.min_age.map(age_label);
-                        let badge = age.as_deref();
-                        if theme::list_item(ui, &casino.name, selected, logo, badge, trailing)
-                            .clicked()
+                        let daily = casino
+                            .tracks_dailies()
+                            .then(|| casino.daily_days().contains(&today));
+                        if theme::list_item(
+                            ui,
+                            &casino.name,
+                            selected,
+                            logo,
+                            trailing,
+                            daily,
+                        )
+                        .clicked()
                         {
                             self.view = View::Casino(casino.id);
                         }
