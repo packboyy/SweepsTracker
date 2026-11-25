@@ -15,7 +15,7 @@ mod trash;
 use crate::grail::{self, GrailCasino, GrailDb};
 use crate::model::*;
 use crate::store::{self, Deleted, EntryRef, Store};
-use crate::theme::{self, ACCENT, DIM, GAIN, LOSS, PRIMARY};
+use crate::theme::{self, accent, dim, gain, loss, primary};
 use crate::titlebar;
 use crate::update;
 use chrono::{Datelike, Local, NaiveDate};
@@ -23,7 +23,7 @@ use eframe::egui::{
     self, Align, Align2, Color32, FontId, Key, Layout, RichText, Sense, Stroke, Vec2,
 };
 use egui_extras::{Column, DatePickerButton, TableBuilder};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -43,38 +43,94 @@ enum Kind {
     FreeSc,
 }
 
-/// New-entry form. Purchases use `spent` + `cc`; withdrawals `amount`, `method`, `fee`,
-/// `received`; free SC `sc` + `source`.
-struct EntryForm {
-    kind: Kind,
+impl Kind {
+    fn of(row: EntryRef) -> Kind {
+        match row {
+            EntryRef::Purchase(_) => Kind::Purchase,
+            EntryRef::Redemption(_) => Kind::Withdrawal,
+            EntryRef::FreeCoins(_) => Kind::FreeSc,
+        }
+    }
+}
+
+/// What's typed into the new-entry form or the edit dialog. Purchases use `spent` + `cc`;
+/// withdrawals `amount`, `method`, `fee`, `received`; free SC `sc` + `source`.
+struct EntryFields {
     date: NaiveDate,
     spent: String,
     cc: String,
     amount: String,
     method: Method,
     fee: String,
-    /// Received now (true) or still pending.
+    /// Received (true) or still pending.
     received: bool,
     sc: String,
     source: Source,
     note: String,
+}
+
+impl EntryFields {
+    fn new(date: NaiveDate) -> Self {
+        EntryFields {
+            date,
+            spent: String::new(),
+            cc: String::new(),
+            amount: String::new(),
+            method: Method::Bank,
+            fee: String::new(),
+            received: true,
+            sc: String::new(),
+            source: Source::Daily,
+            note: String::new(),
+        }
+    }
+
+    /// Whether this kind of entry can be saved. Blank fields count as 0; anything typed must
+    /// be a non-negative amount.
+    fn valid(&self, kind: Kind) -> bool {
+        let ok = |t: &str| t.trim().is_empty() || parse_cents(t).is_some_and(|v| v >= 0);
+        match kind {
+            Kind::Purchase => {
+                ok(&self.spent) && ok(&self.cc) && (cents(&self.spent) > 0 || cents(&self.cc) > 0)
+            }
+            Kind::Withdrawal => {
+                cents(&self.amount) > 0 && ok(&self.fee) && cents(&self.fee) <= cents(&self.amount)
+            }
+            Kind::FreeSc => cents(&self.sc) > 0,
+        }
+    }
+
+    /// The withdrawal to save, received on `received` (None while pending).
+    fn redemption(&self, received: Option<NaiveDate>) -> store::RedemptionInput {
+        store::RedemptionInput {
+            date: self.date,
+            amount: cents(&self.amount),
+            method: self.method,
+            fee: cents(&self.fee),
+            received,
+            note: self.note.trim().to_string(),
+        }
+    }
+}
+
+/// An amount field's value; blank counts as 0 (and `EntryFields::valid` rejects bad input).
+fn cents(text: &str) -> Cents {
+    parse_cents(text).unwrap_or(0)
+}
+
+/// New-entry form on the casino page.
+struct EntryForm {
+    kind: Kind,
+    fields: EntryFields,
     focus_first: bool,
 }
 
-/// Edit dialog state. Purchases use `spent` + `cc`; redemptions use `amount`.
+/// Edit dialog state.
 struct EditState {
     row: EntryRef,
-    date: NaiveDate,
-    spent: String,
-    cc: String,
-    amount: String,
-    method: Method,
-    fee: String,
-    received: bool,
+    fields: EntryFields,
+    /// When a received withdrawal arrived (its request date is `fields.date`).
     received_date: NaiveDate,
-    sc: String,
-    source: Source,
-    note: String,
 }
 
 /// The "Add casino" dropdown.
@@ -126,7 +182,9 @@ enum ProjectAction {
 #[derive(Default)]
 struct Cache {
     totals: Stats,
-    casino: HashMap<i64, Stats>,
+    casino: HashMap<i64, CasinoCache>,
+    /// Days with a daily claimed at any casino (the sidebar's streak).
+    daily_days: BTreeSet<NaiveDate>,
     daily_net: BTreeMap<NaiveDate, Cents>,
     /// Casino id -> index into the SweepsGrail list, for casinos that match one.
     grail: HashMap<i64, usize>,
@@ -146,6 +204,29 @@ impl Cache {
     }
 }
 
+/// Per-casino numbers for the sidebar and casino page.
+#[derive(Default)]
+struct CasinoCache {
+    stats: Stats,
+    /// Days with a daily login bonus logged (empty if dailies aren't tracked here).
+    daily_days: BTreeSet<NaiveDate>,
+    /// The most recent daily's amount, which Claim logs again.
+    last_daily_sc: Option<Cents>,
+    /// The entries table's rows, newest first.
+    rows: Vec<casino::RowIndex>,
+}
+
+impl CasinoCache {
+    fn new(casino: &Casino) -> Self {
+        CasinoCache {
+            stats: casino.stats(),
+            daily_days: casino.daily_days(),
+            last_daily_sc: casino.last_daily_sc(),
+            rows: casino::sorted_rows(casino),
+        }
+    }
+}
+
 /// What the Undo button in the notice bar puts back.
 #[derive(Clone, Copy)]
 enum Undo {
@@ -161,8 +242,11 @@ pub struct App {
     cache: Cache,
     /// The last delete, offered as Undo in the toast.
     undo: Option<Undo>,
-    /// Message the toast is showing and when it first appeared (for auto-dismiss).
-    toast_shown: Option<(String, f64)>,
+    /// Message the toast is showing, when it appeared (for the slide-in) and when its
+    /// auto-dismiss timer started (restarted while hovered).
+    toast_shown: Option<(String, f64, f64)>,
+    /// The page on screen and when it was switched to (for the fade-in).
+    page_shown: (View, f64),
     #[cfg(target_os = "macos")]
     native_menu: native_menu::NativeMenu,
     /// Year shown on the Taxes page.
@@ -211,16 +295,16 @@ fn today() -> NaiveDate {
 
 fn profit_color(v: Cents) -> Color32 {
     if v > 0 {
-        GAIN
+        gain()
     } else if v < 0 {
-        LOSS
+        loss()
     } else {
-        PRIMARY
+        primary()
     }
 }
 
-fn dim(text: impl Into<String>) -> RichText {
-    RichText::new(text).color(DIM)
+fn dim_text(text: impl Into<String>) -> RichText {
+    RichText::new(text).color(dim())
 }
 
 /// Amount text field; returns its response so callers can detect Enter.
@@ -231,9 +315,9 @@ fn amount_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32) ->
         Ok(v) if v != 0.0 => format!("e.g. {hint}"),
         _ => hint.to_string(),
     };
-    let mut edit = egui::TextEdit::singleline(text).hint_text(theme::hint(&placeholder));
+    let mut edit = egui::TextEdit::singleline(text).hint_text(theme::hint_text(&placeholder));
     if invalid {
-        edit = edit.text_color(LOSS);
+        edit = edit.text_color(loss());
     }
     theme::input(ui, edit, width)
 }
@@ -284,6 +368,36 @@ fn choice_sized<T: Copy + PartialEq, S: Into<String>>(
     resp
 }
 
+/// 0 -> 1 over `duration` seconds since something appeared (`elapsed`), easing out so it
+/// starts fast and settles. Keeps repainting until it's done.
+fn ease_out(ctx: &egui::Context, elapsed: f64, duration: f64) -> f32 {
+    let t = (elapsed / duration).clamp(0.0, 1.0) as f32;
+    if t < 1.0 {
+        ctx.request_repaint();
+    }
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// `cents` counting quickly to a new value when it changes (switching casinos, adding an
+/// entry) instead of jumping. Exact once it settles.
+fn tween(ctx: &egui::Context, id: &str, cents: Cents) -> Cents {
+    let target = cents as f32;
+    let shown = ctx.animate_value_with_time(egui::Id::new(("tween", id)), target, 0.25);
+    if shown == target {
+        cents
+    } else {
+        shown.round() as Cents
+    }
+}
+
+fn theme_preference(appearance: Appearance) -> egui::ThemePreference {
+    match appearance {
+        Appearance::System => egui::ThemePreference::System,
+        Appearance::Light => egui::ThemePreference::Light,
+        Appearance::Dark => egui::ThemePreference::Dark,
+    }
+}
+
 /// "1-day streak" / "12-day streak"
 fn streak_text(days: u32) -> String {
     if days == 1 {
@@ -320,7 +434,7 @@ fn field_cell<R>(
 ) -> R {
     theme::grid_cell(ui, first_col, false, None, CELL_PAD, |ui| {
         ui.spacing_mut().item_spacing.y = 4.0;
-        ui.label(dim(label).small());
+        ui.label(dim_text(label).small());
         add(ui)
     })
     .inner
@@ -340,11 +454,11 @@ fn stat_cell(
     color: Color32,
     hover: Option<Vec<(String, String)>>,
 ) {
-    let tint = (color == GAIN || color == LOSS).then(|| color.gamma_multiply(0.1));
+    let tint = (color == gain() || color == loss()).then(|| color.gamma_multiply(0.1));
     let total = value.clone();
     let cell = theme::grid_cell(ui, first_col, true, tint, STAT_PAD, |ui| {
         ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
-        ui.label(dim(title).small());
+        ui.label(dim_text(title).small());
         // Detail (e.g. "+15 bonus") sits beside the value so every cell is one height.
         ui.horizontal(|ui| {
             ui.label(
@@ -355,7 +469,7 @@ fn stat_cell(
             );
             if let Some(detail) = detail {
                 // Cut off (full text on hover) rather than spill out of a narrow cell.
-                ui.add(egui::Label::new(dim(detail).small()).truncate());
+                ui.add(egui::Label::new(dim_text(detail).small()).truncate());
             }
         });
     });
@@ -369,6 +483,7 @@ fn stat_cell(
 /// Totals as one flush grid box (same style as the SweepsGrail details), with a
 /// "recovered" progress row underneath once there's spending.
 fn stats_row(ui: &mut egui::Ui, stats: Stats) {
+    let ctx = ui.ctx().clone();
     theme::boxed_flush(ui, |ui| {
         ui.columns(4, |cols| {
             for col in cols.iter_mut() {
@@ -395,34 +510,34 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
                 &mut cols[0],
                 true,
                 "SPENT",
-                money(stats.spent),
+                money(tween(&ctx, "spent", stats.spent)),
                 None,
-                PRIMARY,
+                primary(),
                 None,
             );
             stat_cell(
                 &mut cols[1],
                 false,
                 "TOTAL COINS",
-                coins(stats.cc_received + stats.free_sc),
+                coins(tween(&ctx, "coins", stats.cc_received + stats.free_sc)),
                 None,
-                PRIMARY,
+                primary(),
                 Some(coin_rows),
             );
             stat_cell(
                 &mut cols[2],
                 false,
                 "WITHDRAWN",
-                money(stats.withdrawn),
+                money(tween(&ctx, "withdrawn", stats.withdrawn)),
                 join(payout_notes),
-                PRIMARY,
+                primary(),
                 None,
             );
             stat_cell(
                 &mut cols[3],
                 false,
                 "NET PROFIT",
-                signed_money(stats.net()),
+                signed_money(tween(&ctx, "net", stats.net())),
                 None,
                 profit_color(stats.net()),
                 None,
@@ -436,7 +551,7 @@ fn stats_row(ui: &mut egui::Ui, stats: Stats) {
                 // Rows default to button height, which left a gap above the bar.
                 ui.spacing_mut().interact_size.y = 0.0;
                 ui.horizontal(|ui| {
-                    ui.label(dim("RECOVERED").small());
+                    ui.label(dim_text("RECOVERED").small());
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(RichText::new(format!("{} of spend", percent(recovered))).small());
                     });
@@ -492,6 +607,7 @@ impl App {
             config,
             action: None,
             view: View::Overview,
+            page_shown: (View::Overview, 0.0),
             picker: Picker {
                 open: false,
                 query: String::new(),
@@ -507,16 +623,7 @@ impl App {
             update_rx: None,
             form: EntryForm {
                 kind: Kind::Purchase,
-                date: today(),
-                spent: String::new(),
-                cc: String::new(),
-                amount: String::new(),
-                method: Method::Bank,
-                fee: String::new(),
-                received: true,
-                sc: String::new(),
-                source: Source::Daily,
-                note: String::new(),
+                fields: EntryFields::new(today()),
                 focus_first: false,
             },
             tax_year: today().year(),
@@ -527,6 +634,7 @@ impl App {
             status: None,
             notice: None,
         };
+        ctx.set_theme(theme_preference(app.config.appearance));
         if let Some(dir) = start {
             app.open_project(ctx, &dir);
         }
@@ -583,8 +691,9 @@ impl App {
                 .data
                 .casinos
                 .iter()
-                .map(|c| (c.id, c.stats()))
+                .map(|c| (c.id, CasinoCache::new(c)))
                 .collect(),
+            daily_days: self.data.daily_days(),
             daily_net: self.data.daily_net(),
             grail: self
                 .data
@@ -601,7 +710,7 @@ impl App {
         self.cache
             .casino
             .get(&casino_id)
-            .copied()
+            .map(|c| c.stats)
             .unwrap_or_default()
     }
 
@@ -611,8 +720,8 @@ impl App {
     fn toast(&mut self, ctx: &egui::Context) {
         const NOTICE_SECONDS: f64 = 8.0;
         let (text, color, is_error) = match (&self.status, &self.notice) {
-            (Some(e), _) => (e.clone(), LOSS, true),
-            (None, Some(n)) => (n.clone(), PRIMARY, false),
+            (Some(e), _) => (e.clone(), loss(), true),
+            (None, Some(n)) => (n.clone(), primary(), false),
             _ => {
                 self.toast_shown = None;
                 return;
@@ -620,10 +729,13 @@ impl App {
         };
         let now = ctx.input(|i| i.time);
         // Restart the timer whenever a new message appears.
-        if self.toast_shown.as_ref().map(|(t, _)| t) != Some(&text) {
-            self.toast_shown = Some((text.clone(), now));
+        if self.toast_shown.as_ref().map(|(t, _, _)| t) != Some(&text) {
+            self.toast_shown = Some((text.clone(), now, now));
         }
-        let shown_at = self.toast_shown.as_ref().map_or(now, |(_, at)| *at);
+        let (appeared, shown_at) = self
+            .toast_shown
+            .as_ref()
+            .map_or((now, now), |(_, appeared, at)| (*appeared, *at));
         if !is_error && now - shown_at > NOTICE_SECONDS {
             self.notice = None;
             self.undo = None;
@@ -631,21 +743,22 @@ impl App {
             return;
         }
 
+        // Slides up and fades in over a moment when a new message appears.
+        let enter = ease_out(ctx, now - appeared, 0.15);
         let mut undo_clicked = false;
         let mut close = false;
         let area = egui::Area::new(egui::Id::new("toast"))
             .order(egui::Order::Foreground)
-            .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -24.0))
+            .anchor(
+                Align2::CENTER_BOTTOM,
+                Vec2::new(0.0, -24.0 + 14.0 * (1.0 - enter)),
+            )
             .show(ctx, |ui| {
+                ui.multiply_opacity(enter);
                 egui::Frame::none()
-                    .fill(theme::BG)
+                    .fill(theme::bg())
                     .stroke(Stroke::new(theme::BORDER, color))
-                    .shadow(egui::Shadow {
-                        offset: Vec2::splat(theme::SHADOW),
-                        blur: 0.0,
-                        spread: 0.0,
-                        color,
-                    })
+                    .shadow(theme::hard_shadow(theme::SHADOW, color))
                     .inner_margin(egui::Margin::symmetric(14.0, 8.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -664,7 +777,7 @@ impl App {
             });
         if area.response.hovered() {
             // Keep it up while the pointer is on it.
-            self.toast_shown = Some((text, now));
+            self.toast_shown = Some((text, appeared, now));
         }
         if !is_error {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
@@ -746,13 +859,9 @@ impl App {
 
     /// Picks up the update check once it finishes and says how it went.
     fn poll_update(&mut self) {
-        let result = self.update_rx.as_ref().and_then(|rx| match rx.try_recv() {
-            Ok(result) => Some(result),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Err("the check stopped unexpectedly".into())),
-        });
-        let Some(result) = result else { return };
-        self.update_rx = None;
+        let Some(result) = poll(&mut self.update_rx, "the check") else {
+            return;
+        };
         self.update = update::State::Idle;
         let version = env!("CARGO_PKG_VERSION");
         match result {
@@ -775,26 +884,27 @@ impl App {
 
     /// Picks up the background SweepsGrail fetch once it finishes.
     fn poll_grail(&mut self) {
-        let result = self.grail_rx.as_ref().and_then(|rx| match rx.try_recv() {
-            Ok(result) => Some(result),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                Some(Err("the download stopped unexpectedly".into()))
-            }
-        });
-        match result {
+        match poll(&mut self.grail_rx, "the download") {
             Some(Ok(db)) => {
                 self.grail = db;
-                self.grail_rx = None;
                 self.rebuild_cache();
             }
-            Some(Err(e)) => {
-                self.grail_error = Some(e);
-                self.grail_rx = None;
-            }
+            Some(Err(e)) => self.grail_error = Some(e),
             None => {}
         }
     }
+}
+
+/// The result of a background job once it's done (clearing `rx`), or None while it runs.
+/// `what` names the job if its thread dies without answering ("the download").
+fn poll<T>(rx: &mut Option<Receiver<Result<T, String>>>, what: &str) -> Option<Result<T, String>> {
+    let result = match rx.as_ref()?.try_recv() {
+        Ok(result) => result,
+        Err(TryRecvError::Empty) => return None,
+        Err(TryRecvError::Disconnected) => Err(format!("{what} stopped unexpectedly")),
+    };
+    *rx = None;
+    Some(result)
 }
 
 /// Read-only flush-grid table: equal-width columns that always fit, alternate rows tinted,
@@ -806,17 +916,17 @@ fn data_table(ui: &mut egui::Ui, headers: &[&str], rows: Vec<Vec<(String, Color3
             for (c, (col, h)) in cols.iter_mut().zip(headers).enumerate() {
                 col.spacing_mut().item_spacing = Vec2::ZERO;
                 theme::grid_cell(col, c == 0, true, None, pad, |ui| {
-                    ui.add(egui::Label::new(dim(*h).small()).truncate());
+                    ui.add(egui::Label::new(dim_text(*h).small()).truncate());
                 });
             }
         });
         if rows.is_empty() {
             theme::grid_cell(ui, true, false, None, Vec2::new(10.0, 12.0), |ui| {
-                ui.label(dim(empty));
+                ui.label(dim_text(empty));
             });
         }
         for (r, row) in rows.into_iter().enumerate() {
-            let fill = (r % 2 == 1).then_some(theme::STRIPE);
+            let fill = (r % 2 == 1).then_some(theme::stripe());
             ui.columns(headers.len(), |cols| {
                 for (c, (col, (text, color))) in cols.iter_mut().zip(row).enumerate() {
                     col.spacing_mut().item_spacing = Vec2::ZERO;
@@ -872,6 +982,7 @@ fn dialog(ctx: &egui::Context, title: &str, add_contents: impl FnOnce(&mut egui:
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        theme::sync(ctx);
         self.poll_grail();
         self.poll_update();
         // Redraw at midnight so "claimed today" resets even if the app sits idle.
@@ -895,7 +1006,21 @@ impl eframe::App for App {
         }
         // Title bar first so it spans the full window width above the sidebar.
         let project = self.project.as_deref().map(project_name);
-        if titlebar::show(ctx, project.as_deref(), &self.update) {
+        let clicks = titlebar::show(
+            ctx,
+            project.as_deref(),
+            &self.update,
+            self.config.appearance,
+        );
+        if clicks.appearance {
+            let next = self.config.appearance.next();
+            if let Err(e) = self.config.update(|c| c.appearance = next) {
+                self.status = Some(format!("Couldn't save the appearance setting: {e}"));
+            }
+            // Applies from the next frame, so this one isn't drawn half in each palette.
+            ctx.set_theme(theme_preference(next));
+        }
+        if clicks.version {
             match &self.update {
                 update::State::Idle => self.check_for_updates(ctx),
                 update::State::Checking => {}
@@ -928,7 +1053,7 @@ impl eframe::App for App {
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::central_panel(&ctx.style())
-                        .fill(theme::CONTENT_BG)
+                        .fill(theme::content_bg())
                         .inner_margin(egui::Margin::same(20.0)),
                 )
                 .show(ctx, |ui| self.welcome(ui));
@@ -948,17 +1073,26 @@ impl eframe::App for App {
             )
             .show(ctx, |ui| self.sidebar(ui));
 
+        // A new page fades in quickly instead of popping.
+        let now = ctx.input(|i| i.time);
+        if self.page_shown.0 != self.view {
+            self.page_shown = (self.view, now);
+        }
+        let page_fade = ease_out(ctx, now - self.page_shown.1, 0.12);
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::central_panel(&ctx.style())
-                    .fill(theme::CONTENT_BG)
+                    .fill(theme::content_bg())
                     .inner_margin(egui::Margin::same(20.0)),
             )
-            .show(ctx, |ui| match self.view {
-                View::Overview => self.overview(ui),
-                View::Casino(id) => self.casino_view(ui, id),
-                View::Trash => self.trash(ui),
-                View::Taxes => self.taxes(ui),
+            .show(ctx, |ui| {
+                ui.multiply_opacity(page_fade);
+                match self.view {
+                    View::Overview => self.overview(ui),
+                    View::Casino(id) => self.casino_view(ui, id),
+                    View::Trash => self.trash(ui),
+                    View::Taxes => self.taxes(ui),
+                }
             });
 
         self.casino_picker(ctx);

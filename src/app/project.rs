@@ -214,7 +214,7 @@ impl App {
                     self.config.recent.iter().filter(|d| **d != dir).collect();
                 if !others.is_empty() {
                     ui.add_space(8.0);
-                    ui.label(dim("  RECENT").small());
+                    ui.label(dim_text("  RECENT").small());
                     ui.add_space(2.0);
                     for d in others {
                         if theme::menu_item(ui, &project_name(d), "")
@@ -243,7 +243,7 @@ impl App {
                     .size(30.0)
                     .family(theme::bold()),
             );
-            ui.label(dim(
+            ui.label(dim_text(
                 "Each project is a folder with its own casinos and entries.",
             ));
             ui.add_space(20.0);

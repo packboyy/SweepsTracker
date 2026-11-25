@@ -946,7 +946,10 @@ fn csv_quotes_hold_commas_and_escaped_quotes() {
     );
     // A doubled quote inside a quoted cell is a literal quote, not the end of the cell.
     let rows = parse_spreadsheet("\"3/13/2026\",\"90\",\"100\",\"\"\"\"");
-    assert_eq!((rows[0].spent, rows[0].cc_received, rows[0].withdrawal), (9000, 10000, 0));
+    assert_eq!(
+        (rows[0].spent, rows[0].cc_received, rows[0].withdrawal),
+        (9000, 10000, 0)
+    );
 }
 
 /// An old project whose casino names differ only by case used to fail to open at all.
@@ -1008,7 +1011,12 @@ impl Child {
     /// With extra environment variables (e.g. HOME, so the app folder is a temp folder).
     fn spawn_with(mode: &str, dir: &Path, env: &[(&str, &str)]) -> Child {
         let mut process = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["stress::child_process", "--exact", "--ignored", "--nocapture"])
+            .args([
+                "stress::child_process",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
             .env("SWEEPS_CHILD", mode)
             .env("SWEEPS_DIR", dir)
             .envs(env.iter().copied())
@@ -1019,7 +1027,10 @@ impl Child {
         let stdout = process.stdout.take().unwrap();
         let (tx, lines) = mpsc::channel();
         std::thread::spawn(move || {
-            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
                 // libtest can print its own text on the same line, so find the marker.
                 if let Some(at) = line.find("@@") {
                     let _ = tx.send(line[at + 2..].to_string());
@@ -1032,7 +1043,10 @@ impl Child {
     /// Waits for the child to print `what`; panics after 30 s.
     fn wait_for(&self, what: &str) {
         loop {
-            let line = self.lines.recv_timeout(Duration::from_secs(30)).expect(what);
+            let line = self
+                .lines
+                .recv_timeout(Duration::from_secs(30))
+                .expect(what);
             if line == what {
                 return;
             }
@@ -1106,7 +1120,9 @@ fn child_process() {
             let len: usize = std::env::var("SWEEPS_LEN").unwrap().parse().unwrap();
             let pid = std::process::id();
             let config = Config {
-                recent: (0..len).map(|i| PathBuf::from(format!("/{pid}/{i}"))).collect(),
+                recent: (0..len)
+                    .map(|i| PathBuf::from(format!("/{pid}/{i}")))
+                    .collect(),
                 ..Default::default()
             };
             for _ in 0..2_000 {
@@ -1129,8 +1145,10 @@ fn child_process() {
         "two-windows" => {
             let mut a = Config::load();
             let mut b = Config::load();
-            a.update(|c| c.push_recent(Path::new("/projects/X"))).unwrap();
-            b.update(|c| c.push_recent(Path::new("/projects/Y"))).unwrap();
+            a.update(|c| c.push_recent(Path::new("/projects/X")))
+                .unwrap();
+            b.update(|c| c.push_recent(Path::new("/projects/Y")))
+                .unwrap();
             let saved = Config::load().recent;
             say(&format!("recent {}", saved.len()));
         }
@@ -1186,7 +1204,11 @@ fn crashing_while_saving_keeps_everything_saved() {
         assert!((batches..=batches + 1).contains(&(pasted / 100)));
         batches = pasted / 100;
         drop(s);
-        assert_eq!(integrity(&crate::store::db_path(&dir)), "ok", "round {round}");
+        assert_eq!(
+            integrity(&crate::store::db_path(&dir)),
+            "ok",
+            "round {round}"
+        );
     }
     assert!(saved.len() > 50, "the child barely ran: {}", saved.len());
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1206,7 +1228,10 @@ fn another_running_copy_is_refused_and_a_crash_releases_the_lock() {
         "This project is already open in another Sweeps Tracker window."
     );
     child.kill();
-    assert!(!crate::store::in_use(&dir), "still locked after the other copy crashed");
+    assert!(
+        !crate::store::in_use(&dir),
+        "still locked after the other copy crashed"
+    );
     Store::open(&dir).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -1216,9 +1241,16 @@ fn another_running_copy_is_refused_and_a_crash_releases_the_lock() {
 #[test]
 fn crashing_during_an_old_project_import_still_imports_it() {
     let entries: Vec<String> = (0..20_000)
-        .map(|i| format!(r#"{{"date":"2026-01-01","spent":1,"cc_received":1,"withdrawal":0,"note":"{i}"}}"#))
+        .map(|i| {
+            format!(
+                r#"{{"date":"2026-01-01","spent":1,"cc_received":1,"withdrawal":0,"note":"{i}"}}"#
+            )
+        })
         .collect();
-    let json = format!(r#"{{"casinos":[{{"name":"Old","entries":[{}]}}]}}"#, entries.join(","));
+    let json = format!(
+        r#"{{"casinos":[{{"name":"Old","entries":[{}]}}]}}"#,
+        entries.join(",")
+    );
     let dir = temp_dir("crash-import");
     let fresh = |dir: &Path| {
         let _ = std::fs::remove_dir_all(dir);
@@ -1299,7 +1331,11 @@ fn opening_and_closing_hundreds_of_times() {
     }
     // Other tests run alongside and open files too; a real leak here would be one or more
     // per open, so hundreds.
-    assert!(open_files() <= before + 50, "{before} -> {} open files", open_files());
+    assert!(
+        open_files() <= before + 50,
+        "{before} -> {} open files",
+        open_files()
+    );
     let s = Store::open(&dir).unwrap();
     assert_eq!(s.load().unwrap().casinos[0].purchases.len(), 500);
     drop(s);
@@ -1320,12 +1356,22 @@ fn app_dir_in(home: &Path) -> PathBuf {
 /// Runs `copies` writer processes (`mode`, each with a different SWEEPS_LEN) while reading
 /// `file` as fast as possible; every read must parse with `check`. Returns how many reads
 /// were made.
-fn race_writers(mode: &str, dir: &Path, home: &Path, file: &Path, check: impl Fn(&str) -> Result<(), String>) -> usize {
+fn race_writers(
+    mode: &str,
+    dir: &Path,
+    home: &Path,
+    file: &Path,
+    check: impl Fn(&str) -> Result<(), String>,
+) -> usize {
     let lens = ["1", "40", "3", "90"];
     let children: Vec<Child> = lens
         .iter()
         .map(|len| {
-            Child::spawn_with(mode, dir, &[("HOME", home.to_str().unwrap()), ("SWEEPS_LEN", len)])
+            Child::spawn_with(
+                mode,
+                dir,
+                &[("HOME", home.to_str().unwrap()), ("SWEEPS_LEN", len)],
+            )
         })
         .collect();
     let mut reads = 0;
@@ -1345,7 +1391,11 @@ fn race_writers(mode: &str, dir: &Path, home: &Path, file: &Path, check: impl Fn
             .filter(|c| c.lines.try_recv().is_ok_and(|l| l == "done"))
             .count()
             .max(finished);
-        if finished < children.len() && children.iter().all(|c| matches!(c.lines.try_recv(), Err(mpsc::TryRecvError::Disconnected))) {
+        if finished < children.len()
+            && children
+                .iter()
+                .all(|c| matches!(c.lines.try_recv(), Err(mpsc::TryRecvError::Disconnected)))
+        {
             break;
         }
     }
@@ -1400,7 +1450,10 @@ fn two_windows_both_keep_their_recent_projects() {
     let child = Child::spawn_with("two-windows", &home, &[("HOME", home.to_str().unwrap())]);
     let line = child.lines.recv_timeout(Duration::from_secs(30)).unwrap();
     child.kill();
-    assert_eq!(line, "recent 2", "a window's project was dropped from Recent");
+    assert_eq!(
+        line, "recent 2",
+        "a window's project was dropped from Recent"
+    );
     std::fs::remove_dir_all(&home).unwrap();
 }
 
@@ -1443,7 +1496,10 @@ fn damaged_project_files_never_crash() {
             }
             3 => {
                 let pages = bytes.len() / page;
-                let (from, to) = (rng.below(pages as u64) as usize, rng.below(pages as u64) as usize);
+                let (from, to) = (
+                    rng.below(pages as u64) as usize,
+                    rng.below(pages as u64) as usize,
+                );
                 let copy = bytes[from * page..(from + 1) * page].to_vec();
                 bytes[to * page..(to + 1) * page].copy_from_slice(&copy);
             }
@@ -1540,9 +1596,32 @@ fn parse_csv_strict(text: &str) -> Result<Vec<Vec<String>>, String> {
 #[test]
 fn tax_csv_reads_back_exactly_and_matches_the_taxes_page() {
     let texts = [
-        "", "plain", "a,b", "say \"hi\"", "line1\nline2", "crlf\r\nend", "cr\ronly", "=SUM(A1)",
-        "+1", "-1", "-5.50", "-", "-x", "@cmd", "\tTab", "\rCR", " =lead", "'quoted", "ﾟ✨🎰",
-        "\"", "\"\"", ",", "\n", "trailing space ", "שלום", "-1,000",
+        "",
+        "plain",
+        "a,b",
+        "say \"hi\"",
+        "line1\nline2",
+        "crlf\r\nend",
+        "cr\ronly",
+        "=SUM(A1)",
+        "+1",
+        "-1",
+        "-5.50",
+        "-",
+        "-x",
+        "@cmd",
+        "\tTab",
+        "\rCR",
+        " =lead",
+        "'quoted",
+        "ﾟ✨🎰",
+        "\"",
+        "\"\"",
+        ",",
+        "\n",
+        "trailing space ",
+        "שלום",
+        "-1,000",
     ];
     let mut rng = Rng(0xc5f);
     for round in 0..300 {
@@ -1560,8 +1639,12 @@ fn tax_csv_reads_back_exactly_and_matches_the_taxes_page() {
         let mut rng2 = Rng(round + 1);
         for id in 0..1 + rng2.below(4) as i64 {
             let date = |r: &mut Rng| {
-                NaiveDate::from_ymd_opt(2023 + r.below(4) as i32, 1 + r.below(12) as u32, 1 + r.below(28) as u32)
-                    .unwrap()
+                NaiveDate::from_ymd_opt(
+                    2023 + r.below(4) as i32,
+                    1 + r.below(12) as u32,
+                    1 + r.below(28) as u32,
+                )
+                .unwrap()
             };
             let mut c = Casino {
                 id,
@@ -1588,7 +1671,8 @@ fn tax_csv_reads_back_exactly_and_matches_the_taxes_page() {
                     amount,
                     method: *rng2.pick(&Method::ALL),
                     fee: rng2.below(amount as u64 + 1) as i64,
-                    received: (rng2.below(3) > 0).then(|| requested + chrono::Days::new(rng2.below(40))),
+                    received: (rng2.below(3) > 0)
+                        .then(|| requested + chrono::Days::new(rng2.below(40))),
                     note: text(),
                 });
             }
@@ -1606,26 +1690,43 @@ fn tax_csv_reads_back_exactly_and_matches_the_taxes_page() {
         }
 
         let out = tax::csv(&data, None);
-        let records = parse_csv_strict(&out).unwrap_or_else(|e| panic!("round {round}: {e}\n{out}"));
+        let records =
+            parse_csv_strict(&out).unwrap_or_else(|e| panic!("round {round}: {e}\n{out}"));
         assert_eq!(records.len(), 1 + entries, "round {round}");
-        assert!(records.iter().all(|r| r.len() == 12), "round {round}: wrong field count");
+        assert!(
+            records.iter().all(|r| r.len() == 12),
+            "round {round}: wrong field count"
+        );
         // Every name and note comes back as written (formula-looking text gets one ').
         let mut written: Vec<String> = Vec::new();
         for c in &data.casinos {
-            for note in c.purchases.iter().map(|p| &p.note)
+            for note in c
+                .purchases
+                .iter()
+                .map(|p| &p.note)
                 .chain(c.redemptions.iter().map(|r| &r.note))
                 .chain(c.free_coins.iter().map(|f| &f.note))
             {
                 written.push(format!("{}|{}", c.name, note));
             }
         }
-        let unguard = |s: &str| s.strip_prefix('\'').map(str::to_string).unwrap_or(s.to_string());
-        let mut read: Vec<String> = records[1..].iter().map(|r| format!("{}|{}", unguard(&r[1]), unguard(&r[11]))).collect();
+        let unguard = |s: &str| {
+            s.strip_prefix('\'')
+                .map(str::to_string)
+                .unwrap_or(s.to_string())
+        };
+        let mut read: Vec<String> = records[1..]
+            .iter()
+            .map(|r| format!("{}|{}", unguard(&r[1]), unguard(&r[11])))
+            .collect();
         // A note that really starts with ' is written as-is, so unguard both sides alike.
-        let mut written: Vec<String> = written.iter().map(|w| {
-            let (n, note) = w.split_once('|').unwrap();
-            format!("{}|{}", unguard(n), unguard(note))
-        }).collect();
+        let mut written: Vec<String> = written
+            .iter()
+            .map(|w| {
+                let (n, note) = w.split_once('|').unwrap();
+                format!("{}|{}", unguard(n), unguard(note))
+            })
+            .collect();
         written.sort();
         read.sort();
         assert_eq!(read, written, "round {round}");
@@ -1646,16 +1747,36 @@ fn tax_csv_reads_back_exactly_and_matches_the_taxes_page() {
             rows_by_year += recs.len() - 1;
             let cents = |t: &str| parse_cents(t).unwrap();
             let sum = |kind: &str, col: usize, received_only: bool| -> i64 {
-                recs[1..].iter()
+                recs[1..]
+                    .iter()
                     .filter(|r| r[0] == kind && (!received_only || r[4] == "Received"))
                     .map(|r| cents(&r[col]))
                     .sum()
             };
-            assert_eq!(sum("Purchase", 5, false), s.purchases, "round {round} {year} purchases");
-            assert_eq!(sum("Redemption", 5, true), s.redeemed, "round {round} {year} redeemed");
-            assert_eq!(sum("Redemption", 9, true), s.fees, "round {round} {year} fees");
-            assert_eq!(sum("Free SC", 7, false), s.free_sc, "round {round} {year} free SC");
+            assert_eq!(
+                sum("Purchase", 5, false),
+                s.purchases,
+                "round {round} {year} purchases"
+            );
+            assert_eq!(
+                sum("Redemption", 5, true),
+                s.redeemed,
+                "round {round} {year} redeemed"
+            );
+            assert_eq!(
+                sum("Redemption", 9, true),
+                s.fees,
+                "round {round} {year} fees"
+            );
+            assert_eq!(
+                sum("Free SC", 7, false),
+                s.free_sc,
+                "round {round} {year} free SC"
+            );
         }
-        assert_eq!(rows_by_year, entries, "round {round}: per-year exports miss or repeat rows");
+        assert_eq!(
+            rows_by_year, entries,
+            "round {round}: per-year exports miss or repeat rows"
+        );
     }
 }

@@ -11,7 +11,7 @@ enum Restore {
 impl App {
     pub(super) fn trash(&mut self, ui: &mut egui::Ui) {
         page_header(ui, "Recently deleted", |_| {});
-        ui.label(dim(
+        ui.label(dim_text(
             "Deleted casinos and entries are kept in the project's database. Restore them here.",
         ));
         ui.add_space(12.0);
@@ -104,17 +104,17 @@ fn restore_table(
             }
             for (c, h) in headers.iter().chain([&""]).enumerate() {
                 theme::grid_cell(&mut cols[c], c == 0, true, None, pad, |ui| {
-                    ui.add(egui::Label::new(dim(*h).small()).truncate());
+                    ui.add(egui::Label::new(dim_text(*h).small()).truncate());
                 });
             }
         });
         if rows.is_empty() {
             theme::grid_cell(ui, true, false, None, Vec2::new(10.0, 12.0), |ui| {
-                ui.label(dim(empty));
+                ui.label(dim_text(empty));
             });
         }
         for (r, row) in rows.into_iter().enumerate() {
-            let fill = (r % 2 == 1).then_some(theme::STRIPE);
+            let fill = (r % 2 == 1).then_some(theme::stripe());
             ui.columns(headers.len() + 1, |cols| {
                 for col in cols.iter_mut() {
                     col.spacing_mut().item_spacing = Vec2::ZERO;

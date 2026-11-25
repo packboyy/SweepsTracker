@@ -180,11 +180,6 @@ impl Casino {
             .collect()
     }
 
-    /// Whether dailies are claimed here at all (any daily login bonus logged).
-    pub fn tracks_dailies(&self) -> bool {
-        self.free_coins.iter().any(|f| f.source == Source::Daily)
-    }
-
     /// The amount of the most recent daily login bonus, which Claim logs again.
     pub fn last_daily_sc(&self) -> Option<Cents> {
         self.free_coins
@@ -495,6 +490,37 @@ pub struct Config {
     /// SweepsGrail slugs. Missing in older config files, hence the default.
     #[serde(default)]
     pub hidden_casinos: Vec<String>,
+    /// Light, dark, or following the system. Missing in older config files, hence the default.
+    #[serde(default)]
+    pub appearance: Appearance,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    /// The title bar button cycles System -> Light -> Dark.
+    pub fn next(self) -> Appearance {
+        match self {
+            Appearance::System => Appearance::Light,
+            Appearance::Light => Appearance::Dark,
+            Appearance::Dark => Appearance::System,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Appearance::System => "Match system",
+            Appearance::Light => "Light",
+            Appearance::Dark => "Dark",
+        }
+    }
 }
 
 impl Config {
@@ -714,12 +740,11 @@ mod tests {
             redemptions: vec![],
             free_coins: vec![free(1, d, 500, Source::Promo)],
         };
-        assert!(!casino.tracks_dailies());
+        assert!(casino.daily_days().is_empty());
         assert_eq!(casino.last_daily_sc(), None);
         let next = d.succ_opt().unwrap();
         casino.free_coins.push(free(2, next, 30, Source::Daily));
         casino.free_coins.push(free(3, d, 100, Source::Daily));
-        assert!(casino.tracks_dailies());
         // Latest by date, not by entry order.
         assert_eq!(casino.last_daily_sc(), Some(30));
         assert_eq!(casino.daily_days().len(), 2);

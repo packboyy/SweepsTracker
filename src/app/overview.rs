@@ -42,17 +42,17 @@ impl App {
                         for (c, (col, h)) in cols.iter_mut().zip(headers).enumerate() {
                             col.spacing_mut().item_spacing = Vec2::ZERO;
                             theme::grid_cell(col, c == 0, true, None, pad, |ui| {
-                                ui.add(egui::Label::new(dim(h).small()).truncate());
+                                ui.add(egui::Label::new(dim_text(h).small()).truncate());
                             });
                         }
                     });
                     if rows.is_empty() {
                         theme::grid_cell(ui, true, false, None, Vec2::new(10.0, 12.0), |ui| {
-                            ui.label(dim("No casinos yet. Add one from the sidebar."));
+                            ui.label(dim_text("No casinos yet. Add one from the sidebar."));
                         });
                     }
                     for (r, (id, name, s, count)) in rows.into_iter().enumerate() {
-                        let fill = (r % 2 == 1).then_some(theme::STRIPE);
+                        let fill = (r % 2 == 1).then_some(theme::stripe());
                         let cells = [
                             count.to_string(),
                             money(s.spent),
@@ -84,7 +84,7 @@ impl App {
                                 let color = if c + 1 == last {
                                     profit_color(s.net())
                                 } else {
-                                    PRIMARY
+                                    primary()
                                 };
                                 theme::grid_cell(col, false, false, fill, pad, |ui| {
                                     ui.add(
@@ -111,12 +111,16 @@ fn profit_chart(ui: &mut egui::Ui, by_day: &BTreeMap<NaiveDate, Cents>) {
         Sense::hover(),
     );
     let rect = resp.rect;
-    painter.rect_filled(rect.translate(Vec2::splat(theme::SHADOW)), 0.0, PRIMARY);
-    painter.rect_filled(rect, 0.0, theme::BG);
+    painter.rect_filled(
+        rect.translate(Vec2::splat(theme::SHADOW)),
+        0.0,
+        theme::shadow_color(theme::border()),
+    );
+    painter.rect_filled(rect, 0.0, theme::bg());
     painter.rect_stroke(
         rect.shrink(theme::BORDER / 2.0),
         0.0,
-        Stroke::new(theme::BORDER, PRIMARY),
+        Stroke::new(theme::BORDER, theme::border()),
     );
 
     if by_day.len() < 2 {
@@ -125,7 +129,7 @@ fn profit_chart(ui: &mut egui::Ui, by_day: &BTreeMap<NaiveDate, Cents>) {
             Align2::CENTER_CENTER,
             "Add entries on at least two different days to see a chart",
             FontId::proportional(14.0),
-            DIM,
+            dim(),
         );
         return;
     }
@@ -144,31 +148,52 @@ fn profit_chart(ui: &mut egui::Ui, by_day: &BTreeMap<NaiveDate, Cents>) {
     let max = points.iter().map(|p| p.1).max().unwrap_or(0).max(0) as f32;
     let range = (max - min).max(1.0);
 
-    let plot = rect.shrink2(Vec2::new(64.0, 18.0));
+    // Value labels down the left: $0 always, the high and low only when there's room for
+    // them (when the line hugs zero they'd print on top of the $0 label). The plot starts
+    // after the widest one, so long amounts never run into the line or the dates.
+    let small = FontId::proportional(11.5);
+    let (top, bottom) = (rect.top() + 18.0, rect.bottom() - 18.0);
+    let y_of = |v: f32| bottom - (bottom - top) * (v - min) / range;
+    let zero_y = y_of(0.0);
+    let mut labels = vec![(zero_y, money(0))];
+    for v in [max, min] {
+        let y = y_of(v);
+        if labels.iter().all(|(other, _)| (y - other).abs() >= 14.0) {
+            labels.push((y, money(v as Cents)));
+        }
+    }
+    let label_w = labels
+        .iter()
+        .map(|(_, text)| {
+            painter
+                .layout_no_wrap(text.clone(), small.clone(), dim())
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    let plot = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + 8.0 + label_w + 12.0, top),
+        egui::pos2(rect.right() - 24.0, bottom),
+    );
     let to_screen = |d: NaiveDate, v: Cents| {
         let x = plot.left() + plot.width() * (d - first).num_days() as f32 / span;
-        let y = plot.bottom() - plot.height() * (v as f32 - min) / range;
-        egui::pos2(x, y)
+        egui::pos2(x, y_of(v as f32))
     };
 
-    // Zero line and axis labels
-    let zero_y = to_screen(first, 0).y;
     painter.line_segment(
         [
             egui::pos2(plot.left(), zero_y),
             egui::pos2(plot.right(), zero_y),
         ],
-        Stroke::new(theme::BORDER, ACCENT),
+        Stroke::new(theme::BORDER, accent()),
     );
-    let small = FontId::proportional(11.5);
-    for v in [max, 0.0, min] {
-        let y = plot.bottom() - plot.height() * (v - min) / range;
+    for (y, text) in labels {
         painter.text(
             egui::pos2(rect.left() + 8.0, y),
             Align2::LEFT_CENTER,
-            money(v as Cents),
+            text,
             small.clone(),
-            DIM,
+            dim(),
         );
     }
     let last = points.last().unwrap().0;
@@ -177,20 +202,20 @@ fn profit_chart(ui: &mut egui::Ui, by_day: &BTreeMap<NaiveDate, Cents>) {
         Align2::LEFT_BOTTOM,
         first.format("%-m/%-d").to_string(),
         small.clone(),
-        DIM,
+        dim(),
     );
     painter.text(
         egui::pos2(plot.right(), rect.bottom() - 4.0),
         Align2::RIGHT_BOTTOM,
         last.format("%-m/%-d").to_string(),
         small.clone(),
-        DIM,
+        dim(),
     );
 
     let screen: Vec<egui::Pos2> = points.iter().map(|&(d, v)| to_screen(d, v)).collect();
     painter.add(egui::Shape::line(
         screen.clone(),
-        Stroke::new(2.5_f32, PRIMARY),
+        Stroke::new(2.5_f32, primary()),
     ));
 
     // Hover: highlight the nearest day
@@ -203,7 +228,7 @@ fn profit_chart(ui: &mut egui::Ui, by_day: &BTreeMap<NaiveDate, Cents>) {
             painter.rect_filled(
                 egui::Rect::from_center_size(*p, Vec2::splat(8.0)),
                 0.0,
-                PRIMARY,
+                primary(),
             );
             let (d, v) = points[i];
             let label = format!("{}  {}", d.format("%-m/%-d/%Y"), signed_money(v));

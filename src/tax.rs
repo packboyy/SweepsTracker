@@ -387,7 +387,10 @@ mod tests {
         assert_eq!(big.self_employment_tax(), 211_943); // 15,000 * 0.9235 * 0.153
         assert_eq!(big.schedule_c_agi(), 1_500_000 - 105_971);
         // Fees count as costs too.
-        assert_eq!(s(6_000_000, 5_000_000, 100_000).schedule_c_profit(), 1_410_000);
+        assert_eq!(
+            s(6_000_000, 5_000_000, 100_000).schedule_c_profit(),
+            1_410_000
+        );
         // Losses can't push the profit below zero.
         let loss = s(1_000_000, 5_000_000, 0);
         assert_eq!(loss.schedule_c_profit(), 0);

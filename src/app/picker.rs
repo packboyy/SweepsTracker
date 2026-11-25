@@ -57,12 +57,12 @@ impl App {
             .order(egui::Order::Foreground)
             .fixed_pos(picker.anchor.left_bottom() + Vec2::new(0.0, 10.0))
             .show(ctx, |ui| {
-                theme::panel(PRIMARY).show(ui, |ui| {
+                theme::panel(theme::border()).show(ui, |ui| {
                     ui.set_width(390.0);
                     let r = theme::input(
                         ui,
                         egui::TextEdit::singleline(&mut picker.query)
-                            .hint_text(theme::hint("Search SweepsGrail casinos…")),
+                            .hint_text(theme::hint_text("Search SweepsGrail casinos…")),
                         ui.available_width(),
                     );
                     if std::mem::take(&mut picker.focus) {
@@ -109,7 +109,8 @@ impl App {
                     ui.add_space(8.0);
                     if show_hidden {
                         ui.label(
-                            dim("Hidden casinos. Click one to put it back in the list.").small(),
+                            dim_text("Hidden casinos. Click one to put it back in the list.")
+                                .small(),
                         );
                         ui.add_space(4.0);
                     }
@@ -147,7 +148,7 @@ impl App {
                                 }
                             }
                             if matches.is_empty() && !loading {
-                                ui.label(dim(if show_hidden && hidden.is_empty() {
+                                ui.label(dim_text(if show_hidden && hidden.is_empty() {
                                     "Nothing hidden. Point at a casino in the list and click \
                                      its × to hide it here."
                                 } else {
@@ -160,16 +161,16 @@ impl App {
                     ui.horizontal(|ui| {
                         if loading {
                             ui.spinner();
-                            ui.label(dim("Loading casinos from SweepsGrail…").small());
+                            ui.label(dim_text("Loading casinos from SweepsGrail…").small());
                         } else if let Some(e) = error {
                             ui.label(
                                 RichText::new(format!("Couldn't load SweepsGrail: {e}"))
                                     .small()
-                                    .color(LOSS),
+                                    .color(loss()),
                             );
                         } else if fetched_at > 0 {
                             ui.label(
-                                dim(format!(
+                                dim_text(format!(
                                     "{} casinos from SweepsGrail · updated {}",
                                     matches.len().max(added.len()),
                                     ago(fetched_at)
@@ -260,10 +261,10 @@ fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, kind: RowKind) -> (egui::Respo
     let p = ui.painter();
     // Casinos you can still add get a tinted background; ones already in your list stay white.
     let bg = match (added, resp.hovered()) {
-        (false, false) => theme::CONTENT_BG,
-        (false, true) => theme::CONTENT_BG_HOVER,
-        (true, true) => theme::STRIPE,
-        (true, false) => theme::BG,
+        (false, false) => theme::content_bg(),
+        (false, true) => theme::content_bg_hover(),
+        (true, true) => theme::stripe(),
+        (true, false) => theme::bg(),
     };
     // Shrunk a little vertically so neighbouring tinted rows stay visually separate.
     p.rect_filled(rect.shrink2(Vec2::new(0.0, 1.5)), 0.0, bg);
@@ -292,7 +293,7 @@ fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, kind: RowKind) -> (egui::Respo
     let p = &p.with_clip_rect(text_area);
 
     let x = logo.right() + 10.0;
-    let name_color = if added { DIM } else { PRIMARY };
+    let name_color = if added { dim() } else { primary() };
     let name_rect = p.text(
         egui::pos2(x, rect.center().y - 9.0),
         Align2::LEFT_CENTER,
@@ -314,7 +315,7 @@ fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, kind: RowKind) -> (egui::Respo
         Align2::LEFT_CENTER,
         detail.join("  ·  "),
         FontId::proportional(12.5),
-        DIM,
+        dim(),
     );
 
     if !g.tier.is_empty() {
@@ -322,9 +323,9 @@ fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, kind: RowKind) -> (egui::Respo
     }
     // ADDED / NEW tag sits right after the name, outlined like the casino page's NEW tag.
     let tag = if kind == RowKind::Added {
-        Some(("ADDED", DIM))
+        Some(("ADDED", dim()))
     } else if g.is_new && kind == RowKind::Addable {
-        Some(("NEW", GAIN))
+        Some(("NEW", gain()))
     } else {
         None
     };
@@ -344,7 +345,7 @@ fn picker_row(ui: &mut egui::Ui, g: &GrailCasino, kind: RowKind) -> (egui::Respo
     let mut hide = false;
     if kind == RowKind::Addable && ui.rect_contains_pointer(rect) {
         let id = ui.id().with(("hide_casino", &g.slug));
-        hide = theme::x_button_at(ui, x_rect, id, LOSS, theme::GRID)
+        hide = theme::x_button_at(ui, x_rect, id, loss(), theme::grid())
             .on_hover_text("Hide from this list")
             .clicked();
     }

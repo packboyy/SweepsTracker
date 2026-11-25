@@ -20,10 +20,9 @@ impl App {
             {
                 export = Some(None);
             }
-            let export_year = theme::button(ui, format!("Export {year}"))
-                .on_hover_text(format!(
-                    "{year}'s entries as a CSV file for your tax preparer"
-                ));
+            let export_year = theme::button(ui, format!("Export {year}")).on_hover_text(format!(
+                "{year}'s entries as a CSV file for your tax preparer"
+            ));
             if export_year.clicked() {
                 export = Some(Some(year));
             }
@@ -37,7 +36,7 @@ impl App {
                 |y| y.to_string(),
                 size,
             );
-            ui.label(dim("YEAR").small());
+            ui.label(dim_text("YEAR").small());
         });
 
         // Computed once per year shown (and again after data changes), not every frame.
@@ -48,7 +47,7 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.label(dim(
+                ui.label(dim_text(
                     "Estimates for you or your tax preparer, not tax advice. Redemptions count in \
                      the year the money was received; purchases in the year they were made.",
                 ));
@@ -65,10 +64,10 @@ impl App {
                     .iter()
                     .map(|p| {
                         vec![
-                            (p.casino.clone(), PRIMARY),
-                            (p.date.format("%-m/%-d/%Y").to_string(), PRIMARY),
-                            (money(p.amount), PRIMARY),
-                            (p.method.label().to_string(), DIM),
+                            (p.casino.clone(), primary()),
+                            (p.date.format("%-m/%-d/%Y").to_string(), primary()),
+                            (money(p.amount), primary()),
+                            (p.method.label().to_string(), dim()),
                         ]
                     })
                     .collect();
@@ -87,10 +86,10 @@ impl App {
                     .iter()
                     .map(|c| {
                         vec![
-                            (c.name.clone(), PRIMARY),
-                            (money(c.purchases), PRIMARY),
-                            (money(c.redeemed), PRIMARY),
-                            (money(c.fees), PRIMARY),
+                            (c.name.clone(), primary()),
+                            (money(c.purchases), primary()),
+                            (money(c.redeemed), primary()),
+                            (money(c.fees), primary()),
                             (signed_money(c.net()), profit_color(c.net())),
                         ]
                     })
@@ -138,16 +137,16 @@ impl App {
 fn summary(ui: &mut egui::Ui, s: &TaxSummary) {
     let rows: [[(&str, String, Color32); 4]; 2] = [
         [
-            ("REDEMPTIONS RECEIVED", money(s.redeemed), PRIMARY),
-            ("FEES", money(s.fees), PRIMARY),
-            ("PURCHASES", money(s.purchases), PRIMARY),
+            ("REDEMPTIONS RECEIVED", money(s.redeemed), primary()),
+            ("FEES", money(s.fees), primary()),
+            ("PURCHASES", money(s.purchases), primary()),
             ("NET", signed_money(s.net()), profit_color(s.net())),
         ],
         [
-            ("BY BANK", money(s.by_method[0]), PRIMARY),
-            ("BY GIFT CARD", money(s.by_method[1]), PRIMARY),
-            ("BY CRYPTO", money(s.by_method[2]), PRIMARY),
-            ("FREE SC COLLECTED", coins(s.free_sc), PRIMARY),
+            ("BY BANK", money(s.by_method[0]), primary()),
+            ("BY GIFT CARD", money(s.by_method[1]), primary()),
+            ("BY CRYPTO", money(s.by_method[2]), primary()),
+            ("FREE SC COLLECTED", coins(s.free_sc), primary()),
         ],
     ];
     theme::boxed_flush(ui, |ui| {
@@ -157,7 +156,7 @@ fn summary(ui: &mut egui::Ui, s: &TaxSummary) {
                     col.spacing_mut().item_spacing = Vec2::ZERO;
                     theme::grid_cell(col, c == 0, r == 0, None, CELL_PAD, |ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.add(egui::Label::new(dim(title).small()).truncate());
+                        ui.add(egui::Label::new(dim_text(title).small()).truncate());
                         let size = if r == 0 { 22.0 } else { 17.0 };
                         ui.label(
                             RichText::new(value)
@@ -222,14 +221,14 @@ fn filing(ui: &mut egui::Ui, s: &TaxSummary) {
                 theme::grid_cell(col, c == 0, true, None, CELL_PAD, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(8.0, 4.0);
                     ui.horizontal(|ui| {
-                        ui.label(dim(title).small());
+                        ui.label(dim_text(title).small());
                         if lower {
-                            theme::tag(ui, "LOWER AGI", GAIN);
+                            theme::tag(ui, "LOWER AGI", gain());
                         }
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(money(agi)).size(26.0).family(theme::bold()));
-                        ui.label(dim("added to AGI"));
+                        ui.label(dim_text("added to AGI"));
                     });
                     ui.add_space(4.0);
                     // Label in a fixed-width column (wrapping if it must), amount in a
@@ -240,7 +239,7 @@ fn filing(ui: &mut egui::Ui, s: &TaxSummary) {
                         ui.horizontal_top(|ui| {
                             ui.allocate_ui(Vec2::new(label_width, 0.0), |ui| {
                                 ui.set_width(label_width);
-                                ui.add(egui::Label::new(dim(label).small()).wrap());
+                                ui.add(egui::Label::new(dim_text(label).small()).wrap());
                             });
                             let size = Vec2::new(ui.available_width(), 0.0);
                             ui.allocate_ui_with_layout(
@@ -255,12 +254,12 @@ fn filing(ui: &mut egui::Ui, s: &TaxSummary) {
                 });
             }
         });
-        theme::grid_cell(ui, true, false, Some(theme::STRIPE), CELL_PAD, |ui| {
+        theme::grid_cell(ui, true, false, Some(theme::stripe()), CELL_PAD, |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
             ui.label(
                 RichText::new("A lower AGI can keep credits like the AOTC.").family(theme::bold()),
             );
-            ui.label(dim(
+            ui.label(dim_text(
                 "If you play regularly to make a profit and keep records of it (like this app), \
                  you may qualify to file as a professional gambler on Schedule C and still take \
                  the standard deduction. Estimates only; ask your tax preparer which way is \

@@ -285,7 +285,9 @@ impl Store {
     /// True for a database no casino was ever added to (deleted ones count as added).
     fn never_had_casinos(&self) -> Result<bool, String> {
         self.conn
-            .query_row("SELECT NOT EXISTS (SELECT 1 FROM casinos)", [], |r| r.get(0))
+            .query_row("SELECT NOT EXISTS (SELECT 1 FROM casinos)", [], |r| {
+                r.get(0)
+            })
             .map_err(err)
     }
 

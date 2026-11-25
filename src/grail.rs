@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
 pub const SITE: &str = "https://sweepsgrail.com";
-const USER_AGENT: &str = "SweepsTracker/0.1 (personal spending tracker)";
 /// Refresh the cached list once a day.
 const MAX_AGE_SECS: i64 = 24 * 60 * 60;
 
@@ -282,7 +281,7 @@ pub fn parse(html: &str) -> Vec<GrailCasino> {
 
 fn fetch() -> Result<GrailDb, String> {
     let html = ureq::get(SITE)
-        .set("User-Agent", USER_AGENT)
+        .set("User-Agent", crate::USER_AGENT)
         .call()
         .map_err(|e| e.to_string())?
         .into_string()

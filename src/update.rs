@@ -7,7 +7,6 @@ use eframe::egui;
 use std::sync::mpsc::{self, Receiver};
 
 pub const REPO: &str = "packboyy/SweepsTracker";
-const USER_AGENT: &str = concat!("SweepsTracker/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Release {
@@ -47,7 +46,7 @@ pub fn check_in_background(ctx: egui::Context) -> Receiver<Result<Outcome, Strin
 fn check() -> Result<Outcome, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let response = ureq::get(&url)
-        .set("User-Agent", USER_AGENT)
+        .set("User-Agent", crate::USER_AGENT)
         .set("Accept", "application/vnd.github+json")
         .call();
     let json: serde_json::Value = match response {

@@ -1,4 +1,4 @@
-//! Custom title bar: a periwinkle strip with the app and project name that you can drag
+//! Custom title bar: a periwinkle strip (dark navy in dark mode) with the app and project name that you can drag
 //! (double-click to maximize).
 //!
 //! - macOS: the native title bar is made transparent and the content extends under it, so
@@ -6,7 +6,8 @@
 //! - Windows / Linux: the native frame is removed; this bar draws its own minimize,
 //!   maximize and close buttons, and `resize_edges` restores drag-to-resize at the edges.
 
-use crate::theme::{bold, ACCENT, BG, LOSS, PRIMARY};
+use crate::model::Appearance;
+use crate::theme::{accent, bold, loss, titlebar_bg, titlebar_line, titlebar_text};
 use eframe::egui::{
     self, Align, Align2, Color32, CursorIcon, FontId, Layout, Rect, ResizeDirection, Sense, Stroke,
     Vec2, ViewportCommand,
@@ -35,13 +36,26 @@ pub fn configure(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
     }
 }
 
-/// Draws the title bar. Returns true when the version (or the update notice in its place)
-/// was clicked.
-pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::State) -> bool {
-    let mut version_clicked = false;
+/// What was clicked in the title bar this frame.
+#[derive(Default)]
+pub struct Clicks {
+    /// The version, or the update notice in its place.
+    pub version: bool,
+    /// The light/dark button.
+    pub appearance: bool,
+}
+
+/// Draws the title bar.
+pub fn show(
+    ctx: &egui::Context,
+    project: Option<&str>,
+    update: &crate::update::State,
+    appearance: Appearance,
+) -> Clicks {
+    let mut clicks = Clicks::default();
     egui::TopBottomPanel::top("title_bar")
         .exact_height(HEIGHT)
-        .frame(egui::Frame::none().fill(PRIMARY))
+        .frame(egui::Frame::none().fill(titlebar_bg()))
         .show_separator_line(false)
         .show(ctx, |ui| {
             let rect = ui.max_rect();
@@ -54,9 +68,9 @@ pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
 
-            // Light-blue line along the bottom, like the header underlines.
+            // Line along the bottom: light blue like the header underlines (muted in dark mode).
             let line = Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - LINE), rect.max);
-            ui.painter().rect_filled(line, 0.0, ACCENT);
+            ui.painter().rect_filled(line, 0.0, titlebar_line());
 
             let left = if cfg!(target_os = "macos") {
                 MAC_BUTTONS_WIDTH
@@ -70,7 +84,7 @@ pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::
                 Align2::LEFT_CENTER,
                 "SWEEPS TRACKER",
                 FontId::new(13.0, bold()),
-                BG,
+                titlebar_text(),
             );
             if let Some(name) = project {
                 p.text(
@@ -78,7 +92,7 @@ pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::
                     Align2::LEFT_CENTER,
                     format!("·   {name}"),
                     FontId::new(13.0, bold()),
-                    BG.gamma_multiply(0.7),
+                    titlebar_text().gamma_multiply(0.7),
                 );
             }
 
@@ -95,6 +109,20 @@ pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::
                 });
                 right = placed.response.rect.left() - 14.0;
             }
+            // Light / dark / system button, left of the version.
+            let button = Rect::from_center_size(egui::pos2(right - 10.0, y), Vec2::splat(20.0));
+            let resp = ui.interact(button, ui.id().with("appearance"), Sense::click());
+            paint_appearance(ui.painter(), button, appearance, resp.hovered());
+            clicks.appearance = resp
+                .on_hover_cursor(CursorIcon::PointingHand)
+                .on_hover_text(format!(
+                    "Appearance: {}. Click for {}.",
+                    appearance.label(),
+                    appearance.next().label()
+                ))
+                .clicked();
+            right = button.left() - 12.0;
+
             // Click to check GitHub for a newer release; once one is found it takes the
             // version's place, and clicking it opens the release's download page.
             use crate::update::State;
@@ -106,7 +134,7 @@ pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::
             let (text, color, tip) = match update {
                 State::Idle => (
                     current,
-                    BG.gamma_multiply(0.7),
+                    titlebar_text().gamma_multiply(0.7),
                     format!(
                         "Built from commit {}. Click to check for updates.",
                         env!("BUILD_COMMIT")
@@ -114,12 +142,12 @@ pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::
                 ),
                 State::Checking => (
                     "Checking for updates…".into(),
-                    BG.gamma_multiply(0.7),
+                    titlebar_text().gamma_multiply(0.7),
                     "Asking GitHub for the latest release".into(),
                 ),
                 State::Available(release) => (
                     format!("{} available · Download", release.tag),
-                    ACCENT,
+                    accent(),
                     format!("You have {current}. Click to open the release on GitHub."),
                 ),
             };
@@ -138,12 +166,50 @@ pub fn show(ctx: &egui::Context, project: Option<&str>, update: &crate::update::
                     egui::Stroke::new(1.0_f32, color),
                 );
             }
-            version_clicked = resp
+            clicks.version = resp
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(tip)
                 .clicked();
         });
-    version_clicked
+    clicks
+}
+
+/// Sun (light), moon (dark) or a half-filled circle (match system), in the bar's text color.
+fn paint_appearance(p: &egui::Painter, rect: Rect, appearance: Appearance, hovered: bool) {
+    if hovered {
+        p.rect_filled(rect, 0.0, Color32::from_white_alpha(40));
+    }
+    let c = rect.center();
+    let color = titlebar_text();
+    let stroke = Stroke::new(1.5_f32, color);
+    match appearance {
+        Appearance::Light => {
+            p.circle_filled(c, 3.5, color);
+            for i in 0..8 {
+                let dir = Vec2::angled(i as f32 * std::f32::consts::FRAC_PI_4);
+                p.line_segment([c + dir * 5.5, c + dir * 7.5], stroke);
+            }
+        }
+        Appearance::Dark => {
+            // A full circle with a bar-colored one over its upper right: a crescent.
+            p.circle_filled(c, 6.0, color);
+            p.circle_filled(c + Vec2::new(3.0, -2.5), 5.0, titlebar_bg());
+        }
+        Appearance::System => {
+            p.circle_stroke(c, 6.0, stroke);
+            p.add(egui::Shape::convex_polygon(
+                (0..=16)
+                    .map(|i| {
+                        let a =
+                            std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 16.0;
+                        c + Vec2::angled(a) * 6.0
+                    })
+                    .collect(),
+                color,
+                Stroke::NONE,
+            ));
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -174,14 +240,14 @@ fn icon_button(ui: &mut egui::Ui, icon: Icon) -> egui::Response {
     let p = ui.painter();
     if resp.hovered() {
         let fill = match icon {
-            Icon::Close => LOSS,
+            Icon::Close => loss(),
             _ => Color32::from_white_alpha(40),
         };
         p.rect_filled(rect, 0.0, fill);
     }
     let c = rect.center();
     let s = 5.0;
-    let stroke = Stroke::new(1.5_f32, BG);
+    let stroke = Stroke::new(1.5_f32, titlebar_text());
     match icon {
         Icon::Close => {
             p.line_segment([c + Vec2::new(-s, -s), c + Vec2::new(s, s)], stroke);

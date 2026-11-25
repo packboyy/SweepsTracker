@@ -15,6 +15,13 @@ mod update;
 
 use eframe::egui;
 
+/// Sent with every web request (SweepsGrail, casino logos, GitHub releases).
+pub const USER_AGENT: &str = concat!(
+    "SweepsTracker/",
+    env!("CARGO_PKG_VERSION"),
+    " (personal spending tracker)"
+);
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: titlebar::configure(

@@ -69,10 +69,7 @@ fn ready(bytes: &Arc<[u8]>) -> BytesPoll {
 
 fn download(uri: &str) -> Result<Vec<u8>, String> {
     let response = ureq::get(uri)
-        .set(
-            "User-Agent",
-            "SweepsTracker/0.1 (personal spending tracker)",
-        )
+        .set("User-Agent", crate::USER_AGENT)
         .call()
         .map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
