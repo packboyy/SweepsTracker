@@ -1,0 +1,57 @@
+# Builds the Windows and Linux versions whenever a release is published (scripts/release.sh
+# publishes each release with the Mac app) and attaches them to that release. It can also be
+# run by hand from the Actions tab to add them to an existing release.
+name: Release builds
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach (e.g. v0.4.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          # build.rs counts the commits for the build number shown in the title bar.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux GUI libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libgl1-mesa-dev libxcursor-dev libxrandr-dev libxi-dev
+
+      - run: cargo build --release
+
+      - name: Package for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/release/sweeps-tracker.exe -DestinationPath "SweepsTracker-$env:TAG-windows.zip"
+
+      - name: Package for Linux
+        if: runner.os == 'Linux'
+        run: tar -czf "SweepsTracker-$TAG-linux.tar.gz" -C target/release sweeps-tracker
+
+      - name: Attach to the release
+        shell: bash
+        run: gh release upload "$TAG" SweepsTracker-"$TAG"-* --clobber

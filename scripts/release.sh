@@ -6,6 +6,8 @@
 # Sets the version in Cargo.toml, commits and pushes that, builds the Mac app, and creates
 # release v0.2.0 with the zipped app attached (and notes listing the commits since the
 # last release). Needs a clean working tree on main and the GitHub CLI (gh) logged in.
+# Publishing it starts .github/workflows/release-builds.yml, which adds the Windows and
+# Linux builds to the release.
 set -eu
 cd "$(dirname "$0")/.."
 

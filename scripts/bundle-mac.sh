@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds "Sweeps Tracker.app" in dist/ with the app icon.
+# Builds "Sweeps Tracker.app" in dist/ with the app icon, for Apple Silicon and Intel Macs.
 #
 #   scripts/bundle-mac.sh            # build dist/Sweeps Tracker.app
 #   scripts/bundle-mac.sh --install  # ...move it to /Applications (no copy left in dist/)
@@ -15,7 +15,16 @@ VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 # Build number: how many commits there are (the same number the app shows, from build.rs).
 BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 0)
 
-cargo build --release
+# Universal binary: Apple Silicon and Intel builds merged, so it runs on any Mac.
+TARGETS="aarch64-apple-darwin x86_64-apple-darwin"
+rustup target add $TARGETS >/dev/null
+for target in $TARGETS; do
+    cargo build --release --target "$target"
+done
+mkdir -p target/universal
+lipo -create -output target/universal/sweeps-tracker \
+    target/aarch64-apple-darwin/release/sweeps-tracker \
+    target/x86_64-apple-darwin/release/sweeps-tracker
 
 # Icon set: every size macOS uses, at 1x and 2x, packed into AppIcon.icns.
 ICONSET=target/AppIcon.iconset
@@ -30,7 +39,7 @@ iconutil -c icns "$ICONSET" -o target/AppIcon.icns
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp target/release/sweeps-tracker "$APP/Contents/MacOS/"
+cp target/universal/sweeps-tracker "$APP/Contents/MacOS/"
 cp target/AppIcon.icns "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

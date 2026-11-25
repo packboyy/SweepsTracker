@@ -37,7 +37,7 @@ The built app is at `target/release/sweeps-tracker` (`sweeps-tracker.exe` on Win
 
 ## Mac app
 ```sh
-scripts/bundle-mac.sh            # builds "dist/Sweeps Tracker.app" with the app icon
+scripts/bundle-mac.sh            # builds "dist/Sweeps Tracker.app" (Apple Silicon + Intel) with the app icon
 scripts/bundle-mac.sh --install  # ...and copies it to /Applications
 ```
 The icon is `assets/icon.png`, made from the artwork in `assets/icon-source.png` with `swift scripts/make-icon.swift assets/icon-source.png assets/icon.png` (fits it into the macOS rounded-square shape).
@@ -45,10 +45,11 @@ The icon is `assets/icon.png`, made from the artwork in `assets/icon-source.png`
 ## Updates
 Click the version in the title bar (or **Check for Updates…** in the app menu) to ask GitHub for the latest [release](https://github.com/packboyy/SweepsTracker/releases). If there's a newer one, the title bar says so; click it to open the download. Only published releases count, not every commit.
 
-To publish a release (sets the version, commits, builds the Mac app and uploads it as a zip):
+To publish a release (sets the version, commits, builds the Mac app for Apple Silicon and Intel and uploads it as a zip):
 ```sh
 scripts/release.sh 0.2.0
 ```
+Publishing a release starts the GitHub Actions workflow in `.github/workflows/release-builds.yml`, which builds the Windows (`.zip`) and Linux (`.tar.gz`) versions and attaches them to the same release a few minutes later. To add them to an older release, run **Release builds** from the repository's Actions tab with that release's tag.
 
 ## Test
 ```sh
