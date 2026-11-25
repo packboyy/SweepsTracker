@@ -22,6 +22,14 @@ It runs on macOS, Windows, and Linux. It's written in Rust with [egui](https://g
   - Projects saved by earlier versions (`sweeps.json`) are imported automatically the first time they're opened; the old file is kept as `sweeps.json.imported`.
   - The recent-projects list and the shared SweepsGrail cache live in the app folder: `~/Library/Application Support/SweepsTracker/` (macOS), `%APPDATA%\SweepsTracker\` (Windows), `~/.local/share/SweepsTracker/` (Linux).
 
+## Install on Linux with Flatpak
+Download `SweepsTracker-vX.Y.Z-linux.flatpak` from the [releases](https://github.com/packboyy/SweepsTracker/releases), then:
+```sh
+flatpak install --user SweepsTracker-vX.Y.Z-linux.flatpak
+flatpak run net.packboy.sweepstracker
+```
+It needs the Freedesktop runtime from Flathub (`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`); `flatpak install` offers to fetch it. Inside the Flatpak, app settings live in `~/.var/app/net.packboy.sweepstracker/`.
+
 ## Install Rust (one time)
 - **macOS / Linux:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - **Windows:** download and run `rustup-init.exe` from https://rustup.rs
@@ -49,7 +57,7 @@ To publish a release (sets the version, commits, builds the Mac app for Apple Si
 ```sh
 scripts/release.sh 0.2.0
 ```
-Publishing a release starts the GitHub Actions workflow in `.github/workflows/release-builds.yml`, which builds the Windows (`.zip`) and Linux (`.tar.gz`) versions and attaches them to the same release a few minutes later. To add them to an older release, run **Release builds** from the repository's Actions tab with that release's tag.
+Publishing a release starts the GitHub Actions workflow in `.github/workflows/release-builds.yml`, which builds the Windows (`.zip`), Linux (`.tar.gz`) and Linux Flatpak (`.flatpak`, from `flatpak/`) versions and attaches them to the same release a few minutes later. To add them to an older release, run **Release builds** from the repository's Actions tab with that release's tag.
 
 ## Test
 ```sh

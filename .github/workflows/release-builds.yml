@@ -1,5 +1,5 @@
-# Builds the Windows and Linux versions whenever a release is published (scripts/release.sh
-# publishes each release with the Mac app) and attaches them to that release. It can also be
+# Builds the Windows, Linux and Linux Flatpak versions whenever a release is published
+# (scripts/release.sh publishes each release with the Mac app) and attaches them to it. It can also be
 # run by hand from the Actions tab to add them to an existing release.
 name: Release builds
 
@@ -55,3 +55,53 @@ jobs:
       - name: Attach to the release
         shell: bash
         run: gh release upload "$TAG" SweepsTracker-"$TAG"-* --clobber
+
+  # Flatpak for Linux (flatpak/net.packboy.sweepstracker.yml), built in Flathub's build image.
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      # Packaging files from this workflow's commit, so older releases (made before the
+      # Flatpak existed) can still get one.
+      - name: Use the current Flatpak files
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git checkout ${{ github.sha }} -- flatpak
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: SweepsTracker.flatpak
+          manifest-path: flatpak/net.packboy.sweepstracker.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: SweepsTracker.flatpak
+
+  # The Flatpak build image has no GitHub CLI, so the upload happens here.
+  attach-flatpak:
+    needs: flatpak
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: flatpak
+
+      - name: Attach to the release
+        run: |
+          mv SweepsTracker.flatpak "SweepsTracker-$TAG-linux.flatpak"
+          gh release upload "$TAG" "SweepsTracker-$TAG-linux.flatpak" --clobber --repo "$GITHUB_REPOSITORY"

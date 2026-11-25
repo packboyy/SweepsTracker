@@ -27,6 +27,9 @@ fn main() -> eframe::Result {
         viewport: titlebar::configure(
             egui::ViewportBuilder::default()
                 .with_title("Sweeps Tracker")
+                // Linux desktops match the window to its .desktop entry and icon by this
+                // (the Flatpak's app id).
+                .with_app_id("net.packboy.sweepstracker")
                 .with_inner_size([1150.0, 720.0])
                 // Wide enough for the widest sidebar (280) plus the casino page header's buttons
                 // and the entries table's columns; tall enough for the casino page.

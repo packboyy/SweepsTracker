@@ -658,7 +658,7 @@ fn unusual_names_notes_and_folder_paths_round_trip() {
         "   spaced   ",
         "tab\there",
     ];
-    let dir = temp_dir("Andy's Sweeps 🎰 [2026] (copy)");
+    let dir = temp_dir("Packboy's Sweeps 🎰 [2026] (copy)");
     let s = Store::open(&dir).unwrap();
     let date = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
     for (i, name) in names.iter().enumerate() {

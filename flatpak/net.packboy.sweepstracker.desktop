@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Sweeps Tracker
+Comment=Track sweepstakes casino spending, coin discounts and withdrawals
+Exec=sweeps-tracker
+Icon=net.packboy.sweepstracker
+StartupWMClass=net.packboy.sweepstracker
+Terminal=false
+Categories=Office;Finance;

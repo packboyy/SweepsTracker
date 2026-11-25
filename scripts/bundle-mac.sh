@@ -48,7 +48,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key><string>$NAME</string>
     <key>CFBundleDisplayName</key><string>$NAME</string>
-    <key>CFBundleIdentifier</key><string>com.andy.sweepstracker</string>
+    <key>CFBundleIdentifier</key><string>net.packboy.sweepstracker</string>
     <key>CFBundleExecutable</key><string>sweeps-tracker</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
